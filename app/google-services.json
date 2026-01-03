@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1048382970128",
+    "project_id": "themirror-proto",
+    "storage_bucket": "themirror-proto.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1048382970128:android:87f7443f4ab60d9996ed95",
+        "android_client_info": {
+          "package_name": "com.mirror.sensor"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCIjWWGxn3dFIqEY6O4ikcSUK8bLAGgt_M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
