@@ -13,27 +13,37 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.core.content.ContextCompat
-import com.mirror.sensor.services.HolisticSensorService
+import com.mirror.sensor.services.HolisticAccessibilityService
 import com.mirror.sensor.ui.screens.MainScreen
+import com.mirror.sensor.viewmodel.MainViewModel
 
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         setContent {
             MaterialTheme {
+                val mainViewModel: androidx.lifecycle.ViewModel = androidx.lifecycle.viewmodel.compose.viewModel<MainViewModel>()
+
                 Surface {
-                    // CHANGE: Call MainScreen instead of HomeScreen
                     MainScreen(
-                        onStartService = { checkPermissionsAndStart() }
+                        // Strict Gatekeeper Logic
+                        onToggleService = { isRunning ->
+                            if (isRunning) {
+                                (mainViewModel as MainViewModel).stopService()
+                            } else {
+                                checkAllPermissionsAndStart(mainViewModel as MainViewModel)
+                            }
+                        },
+                        viewModel = mainViewModel as MainViewModel
                     )
                 }
             }
         }
     }
 
-    private fun checkPermissionsAndStart() {
+    private fun checkAllPermissionsAndStart(viewModel: MainViewModel) {
+        // 1. Runtime Permissions (Mic, Location)
         val permissions = mutableListOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.ACCESS_FINE_LOCATION,
@@ -46,53 +56,45 @@ class MainActivity : ComponentActivity() {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        val allGranted = permissions.all {
+        val allRuntimeGranted = permissions.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
 
-        if (allGranted) {
-            startMirrorService()
-        } else {
+        if (!allRuntimeGranted) {
             requestPermissionsLauncher.launch(permissions.toTypedArray())
-        }
-    }
-
-    private val requestPermissionsLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-            if (permissions[Manifest.permission.RECORD_AUDIO] == true) {
-                startMirrorService()
-            } else {
-                Toast.makeText(this, "Permissions required", Toast.LENGTH_LONG).show()
-            }
+            return
         }
 
-    private fun startMirrorService() {
-        // Accessibility Check
+        // 2. Accessibility Service Check
         if (!isAccessibilityEnabled()) {
-            Toast.makeText(this, "Enable Accessibility", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "The Mirror needs Accessibility to see usage", Toast.LENGTH_LONG).show()
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
-        // Notification Check
+
+        // 3. Notification Listener Check
         if (!isNotificationListenerEnabled()) {
-            Toast.makeText(this, "Enable Notifications", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "The Mirror needs access to Notifications", Toast.LENGTH_LONG).show()
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             return
         }
 
-        // START
-        val intent = Intent(this, HolisticSensorService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
+        // ALL GREEN -> START ENGINE
+        viewModel.startService()
         Toast.makeText(this, "The Mirror is Active", Toast.LENGTH_SHORT).show()
     }
 
+    private val requestPermissionsLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+            val micGranted = permissions[Manifest.permission.RECORD_AUDIO] ?: false
+            if (!micGranted) {
+                Toast.makeText(this, "Microphone is critical!", Toast.LENGTH_LONG).show()
+            }
+            // User can try clicking Start again to proceed
+        }
+
     private fun isAccessibilityEnabled(): Boolean {
-        // Simplified check
-        val service = "${packageName}/${com.mirror.sensor.services.HolisticAccessibilityService::class.java.canonicalName}"
+        val service = "${packageName}/${HolisticAccessibilityService::class.java.canonicalName}"
         val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
         return enabled?.contains(service) == true
     }

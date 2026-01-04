@@ -6,35 +6,66 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoGraph
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.ViewStream
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.mirror.sensor.viewmodel.MainViewModel
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
-    onStartService: () -> Unit
+    onToggleService: (Boolean) -> Unit,
+    viewModel: MainViewModel = viewModel()
 ) {
     val navController = rememberNavController()
+    val isRunning by viewModel.isServiceRunning.collectAsState()
 
-    // Define the screens
     val items = listOf("Stream", "Patterns", "Oracle")
-    val icons = listOf(
-        Icons.Default.ViewStream,
-        Icons.Default.AutoGraph,
-        Icons.Default.Chat
-    )
+    val icons = listOf(Icons.Default.ViewStream, Icons.Default.AutoGraph, Icons.Default.Chat)
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route ?: "Stream"
 
     Scaffold(
+        topBar = {
+            // UPDATED: Cleaner, White/Surface Header
+            TopAppBar(
+                title = {
+                    Text(
+                        currentRoute,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background, // Clean background
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
+                ),
+                actions = {
+                    // THE POWER BUTTON
+                    IconButton(onClick = { onToggleService(isRunning) }) {
+                        Icon(
+                            imageVector = if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
+                            contentDescription = "Toggle Service",
+                            tint = if (isRunning) Color.Red else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                    }
+                }
+            )
+        },
         bottomBar = {
             NavigationBar {
-                val navBackStackEntry by navController.currentBackStackEntryAsState()
-                val currentRoute = navBackStackEntry?.destination?.route
-
                 items.forEachIndexed { index, screen ->
                     NavigationBarItem(
                         icon = { Icon(icons[index], contentDescription = screen) },
@@ -42,15 +73,8 @@ fun MainScreen(
                         selected = currentRoute == screen,
                         onClick = {
                             navController.navigate(screen) {
-                                // Pop up to the start destination of the graph to
-                                // avoid building up a large stack of destinations
-                                popUpTo(navController.graph.startDestinationId) {
-                                    saveState = true
-                                }
-                                // Avoid multiple copies of the same destination when
-                                // reselecting the same item
+                                popUpTo(navController.graph.startDestinationId) { saveState = true }
                                 launchSingleTop = true
-                                // Restore state when reselecting a previously selected item
                                 restoreState = true
                             }
                         }
@@ -64,25 +88,13 @@ fun MainScreen(
             startDestination = "Stream",
             modifier = Modifier.padding(innerPadding)
         ) {
-            // 1. THE STREAM (Existing)
             composable("Stream") {
-                // We pass the start service callback down to Home
-                HomeScreen(onStartService = onStartService)
+                HomeScreen(isServiceRunning = isRunning)
             }
-
-            // 2. THE PATTERNS (New)
-            composable("Patterns") {
-                PatternsScreen()
-            }
-
-            // 3. THE ORACLE (Placeholder for next phase)
+            composable("Patterns") { PatternsScreen() }
             composable("Oracle") {
-                // Temporary Placeholder
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = androidx.compose.ui.Alignment.Center
-                ) {
-                    Text("The Oracle is sleeping...", style = MaterialTheme.typography.headlineMedium)
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                    Text("Oracle Coming Soon...", style = MaterialTheme.typography.bodyLarge)
                 }
             }
         }
