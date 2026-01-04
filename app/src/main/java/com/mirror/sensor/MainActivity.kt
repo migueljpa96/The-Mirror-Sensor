@@ -1,61 +1,47 @@
 package com.mirror.sensor
 
 import android.Manifest
-import android.accessibilityservice.AccessibilityServiceInfo
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.view.accessibility.AccessibilityManager
-import android.widget.Button
-import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.core.content.ContextCompat
+import com.mirror.sensor.services.HolisticSensorService
+import com.mirror.sensor.ui.screens.MainScreen
 
 class MainActivity : ComponentActivity() {
-
-    private val requestPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-            val audioGranted = permissions[Manifest.permission.RECORD_AUDIO] ?: false
-            if (audioGranted) {
-                checkAccessibilityAndStart()
-            } else {
-                Toast.makeText(this, "Microphone permission is required!", Toast.LENGTH_LONG).show()
-            }
-        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(50, 50, 50, 50)
+        setContent {
+            MaterialTheme {
+                Surface {
+                    // CHANGE: Call MainScreen instead of HomeScreen
+                    MainScreen(
+                        onStartService = { checkPermissionsAndStart() }
+                    )
+                }
+            }
         }
-
-        val startButton = Button(this).apply {
-            text = "START THE MIRROR"
-            setOnClickListener { checkPermissions() }
-        }
-
-        layout.addView(startButton)
-        setContentView(layout)
     }
 
-    private fun checkPermissions() {
+    private fun checkPermissionsAndStart() {
         val permissions = mutableListOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION
         )
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             permissions.add(Manifest.permission.ACTIVITY_RECOGNITION)
         }
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -65,64 +51,54 @@ class MainActivity : ComponentActivity() {
         }
 
         if (allGranted) {
-            checkAccessibilityAndStart()
+            startMirrorService()
         } else {
-            requestPermissionLauncher.launch(permissions.toTypedArray())
+            requestPermissionsLauncher.launch(permissions.toTypedArray())
         }
     }
 
-    private fun checkAccessibilityAndStart() {
-        if (!isAccessibilityServiceEnabled()) {
-            Toast.makeText(this, "Please enable Accessibility", Toast.LENGTH_LONG).show()
+    private val requestPermissionsLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+            if (permissions[Manifest.permission.RECORD_AUDIO] == true) {
+                startMirrorService()
+            } else {
+                Toast.makeText(this, "Permissions required", Toast.LENGTH_LONG).show()
+            }
+        }
+
+    private fun startMirrorService() {
+        // Accessibility Check
+        if (!isAccessibilityEnabled()) {
+            Toast.makeText(this, "Enable Accessibility", Toast.LENGTH_LONG).show()
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
-
-        if (!isNotificationServiceEnabled()) {
-            Toast.makeText(this, "Please enable Notification Access", Toast.LENGTH_LONG).show()
+        // Notification Check
+        if (!isNotificationListenerEnabled()) {
+            Toast.makeText(this, "Enable Notifications", Toast.LENGTH_LONG).show()
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             return
         }
 
-        startSensorService()
-    }
-
-    private fun isAccessibilityServiceEnabled(): Boolean {
-        val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-        val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-        for (service in enabledServices) {
-            if (service.id.contains(packageName)) {
-                return true
-            }
-        }
-        return false
-    }
-
-    private fun startSensorService() {
-        val serviceIntent = Intent(this, HolisticSensorService::class.java)
+        // START
+        val intent = Intent(this, HolisticSensorService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
+            startForegroundService(intent)
         } else {
-            startService(serviceIntent)
+            startService(intent)
         }
-        Toast.makeText(this, "The Mirror is Listening...", Toast.LENGTH_SHORT).show()
-        startPeriodicUpload()
+        Toast.makeText(this, "The Mirror is Active", Toast.LENGTH_SHORT).show()
     }
 
-    private fun startPeriodicUpload() {
-        val uploadRequest = androidx.work.PeriodicWorkRequestBuilder<DataUploadWorker>(
-            15, java.util.concurrent.TimeUnit.MINUTES
-        ).build()
-
-        androidx.work.WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "MirrorUploadWorker",
-            androidx.work.ExistingPeriodicWorkPolicy.KEEP,
-            uploadRequest
-        )
+    private fun isAccessibilityEnabled(): Boolean {
+        // Simplified check
+        val service = "${packageName}/${com.mirror.sensor.services.HolisticAccessibilityService::class.java.canonicalName}"
+        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+        return enabled?.contains(service) == true
     }
 
-    private fun isNotificationServiceEnabled(): Boolean {
-        val flat = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
-        return flat != null && flat.contains(packageName)
+    private fun isNotificationListenerEnabled(): Boolean {
+        val enabled = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+        return enabled?.contains(packageName) == true
     }
 }
