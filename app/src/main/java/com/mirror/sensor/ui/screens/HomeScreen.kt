@@ -20,7 +20,8 @@ import com.mirror.sensor.viewmodel.HomeViewModel
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel = viewModel(),
-    isServiceRunning: Boolean = false
+    isServiceRunning: Boolean = false,
+    onMemoryClick: (String) -> Unit
 ) {
     val memories by viewModel.memories.collectAsState()
 
@@ -45,7 +46,10 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(memories) { memory ->
-                    MemoryCard(memory = memory)
+                    MemoryCard(
+                        memory = memory,
+                        onClick = { onMemoryClick(memory.id) } // Pass ID
+                    )
                 }
             }
         }

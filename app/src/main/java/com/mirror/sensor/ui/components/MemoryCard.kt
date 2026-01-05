@@ -21,7 +21,7 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 
 @Composable
-fun MemoryCard(memory: Memory) {
+fun MemoryCard(memory: Memory, onClick: () -> Unit) {
     // 1. Color Psychology: Visualize Stress Level
     val stress = memory.psychological_profile.stress_level
     val moodColor = when {
@@ -31,6 +31,7 @@ fun MemoryCard(memory: Memory) {
     }
 
     Card(
+        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 6.dp, horizontal = 16.dp),

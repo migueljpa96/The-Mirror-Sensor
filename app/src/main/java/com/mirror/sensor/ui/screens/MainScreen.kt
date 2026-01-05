@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.ViewStream
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -30,62 +31,69 @@ fun MainScreen(
     val navController = rememberNavController()
     val isRunning by viewModel.isServiceRunning.collectAsState()
 
-    val items = listOf("Stream", "Patterns", "Oracle")
+    // 1. Define Top-Level Routes (Where we want the Bottom Bar)
+    val topLevelRoutes = listOf("Stream", "Patterns", "Oracle")
+
+    val items = topLevelRoutes
     val icons = listOf(Icons.Default.ViewStream, Icons.Default.AutoGraph, Icons.Default.Chat)
+
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: "Stream"
 
+    // 2. Logic: Only show global bars on top-level screens
+    // If we are in "MemoryDetail/...", we hide them.
+    val showGlobalBars = currentRoute in topLevelRoutes || currentRoute == "Stream"
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        currentRoute,
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onBackground
-                ),
-                actions = {
-                    // THE POWER BUTTON (Visual Fix)
-                    // 1. Use FilledIconButton for a perfect circular background
-                    FilledIconButton(
-                        onClick = { onToggleService(isRunning) },
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            // 2. Use 'error' color for Stop (Red), 'primary' for Play (Purple/Blue)
-                            containerColor = if (isRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                            contentColor = if (isRunning) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary
-                        ),
-                        // 3. Apply spacing to the BUTTON, not the Icon
-                        modifier = Modifier.padding(end = 12.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
-                            contentDescription = "Toggle Service"
-                            // No padding here = perfectly centered icon
+            if (showGlobalBars) { // <--- CONDITIONAL VISIBILITY
+                TopAppBar(
+                    title = {
+                        Text(
+                            currentRoute,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold
                         )
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        titleContentColor = MaterialTheme.colorScheme.onBackground
+                    ),
+                    actions = {
+                        FilledIconButton(
+                            onClick = { onToggleService(isRunning) },
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = if (isRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                contentColor = if (isRunning) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary
+                            ),
+                            modifier = Modifier.padding(end = 12.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                contentDescription = "Toggle Service"
+                            )
+                        }
                     }
-                }
-            )
+                )
+            }
         },
         bottomBar = {
-            NavigationBar {
-                items.forEachIndexed { index, screen ->
-                    NavigationBarItem(
-                        icon = { Icon(icons[index], contentDescription = screen) },
-                        label = { Text(screen) },
-                        selected = currentRoute == screen,
-                        onClick = {
-                            navController.navigate(screen) {
-                                popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
+            if (showGlobalBars) { // <--- CONDITIONAL VISIBILITY
+                NavigationBar {
+                    items.forEachIndexed { index, screen ->
+                        NavigationBarItem(
+                            icon = { Icon(icons[index], contentDescription = screen) },
+                            label = { Text(screen) },
+                            selected = currentRoute == screen,
+                            onClick = {
+                                navController.navigate(screen) {
+                                    popUpTo(navController.graph.startDestinationId) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
                             }
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }
@@ -93,16 +101,34 @@ fun MainScreen(
         NavHost(
             navController = navController,
             startDestination = "Stream",
+            // If bars are hidden, innerPadding is 0, so content uses full screen
             modifier = Modifier.padding(innerPadding)
         ) {
             composable("Stream") {
-                HomeScreen(isServiceRunning = isRunning)
+                HomeScreen(
+                    isServiceRunning = isRunning,
+                    onMemoryClick = { memoryId ->
+                        navController.navigate("MemoryDetail/$memoryId")
+                    }
+                )
             }
             composable("Patterns") { PatternsScreen() }
             composable("Oracle") {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
                     Text("Oracle Coming Soon...", style = MaterialTheme.typography.bodyLarge)
                 }
+            }
+
+            // Detail Screen (Takes over the whole screen)
+            composable("MemoryDetail/{memoryId}") { backStackEntry ->
+                val memoryId = backStackEntry.arguments?.getString("memoryId") ?: return@composable
+                MemoryDetailScreen(
+                    memoryId = memoryId,
+                    onBack = { navController.popBackStack() },
+                    viewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+                        viewModelStoreOwner = (navController.context as androidx.activity.ComponentActivity)
+                    )
+                )
             }
         }
     }
