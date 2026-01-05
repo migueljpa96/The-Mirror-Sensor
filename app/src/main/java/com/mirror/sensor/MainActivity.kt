@@ -13,7 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.core.content.ContextCompat
-import com.mirror.sensor.services.HolisticAccessibilityService
+import com.mirror.sensor.services.ScreenService
 import com.mirror.sensor.ui.screens.MainScreen
 import com.mirror.sensor.viewmodel.MainViewModel
 
@@ -94,7 +94,7 @@ class MainActivity : ComponentActivity() {
         }
 
     private fun isAccessibilityEnabled(): Boolean {
-        val service = "${packageName}/${HolisticAccessibilityService::class.java.canonicalName}"
+        val service = "${packageName}/${ScreenService::class.java.canonicalName}"
         val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
         return enabled?.contains(service) == true
     }

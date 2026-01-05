@@ -12,7 +12,6 @@ import androidx.compose.material.icons.filled.ViewStream
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -38,7 +37,6 @@ fun MainScreen(
 
     Scaffold(
         topBar = {
-            // UPDATED: Cleaner, White/Surface Header
             TopAppBar(
                 title = {
                     Text(
@@ -48,17 +46,26 @@ fun MainScreen(
                     )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background, // Clean background
+                    containerColor = MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onBackground
                 ),
                 actions = {
-                    // THE POWER BUTTON
-                    IconButton(onClick = { onToggleService(isRunning) }) {
+                    // THE POWER BUTTON (Visual Fix)
+                    // 1. Use FilledIconButton for a perfect circular background
+                    FilledIconButton(
+                        onClick = { onToggleService(isRunning) },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            // 2. Use 'error' color for Stop (Red), 'primary' for Play (Purple/Blue)
+                            containerColor = if (isRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                            contentColor = if (isRunning) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary
+                        ),
+                        // 3. Apply spacing to the BUTTON, not the Icon
+                        modifier = Modifier.padding(end = 12.dp)
+                    ) {
                         Icon(
                             imageVector = if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
-                            contentDescription = "Toggle Service",
-                            tint = if (isRunning) Color.Red else MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(end = 8.dp)
+                            contentDescription = "Toggle Service"
+                            // No padding here = perfectly centered icon
                         )
                     }
                 }

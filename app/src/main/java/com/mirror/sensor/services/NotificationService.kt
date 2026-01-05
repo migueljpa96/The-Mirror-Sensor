@@ -15,7 +15,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class NotificationSensor : NotificationListenerService() {
+class NotificationService : NotificationListenerService() {
 
     private var tempLogFile: File? = null
 

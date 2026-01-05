@@ -16,7 +16,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class HolisticAccessibilityService : AccessibilityService() {
+class ScreenService : AccessibilityService() {
 
     private var tempLogFile: File? = null
     private var lastCapturedText: String = ""

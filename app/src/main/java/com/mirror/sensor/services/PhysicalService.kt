@@ -1,4 +1,4 @@
-package com.mirror.sensor.managers
+package com.mirror.sensor.services
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -11,8 +11,6 @@ import android.hardware.SensorManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
-import android.media.AudioManager
-import android.net.ConnectivityManager
 import android.os.BatteryManager
 import android.os.Bundle
 import android.util.Log
@@ -25,13 +23,10 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.sqrt
 
-class PhysicalSensorManager(private val context: Context) : SensorEventListener, LocationListener {
+class PhysicalService(private val context: Context) : SensorEventListener, LocationListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-    private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-
     private var tempLogFile: File? = null
     private var lastLogTime = 0L
     private val LOG_INTERVAL_MS = 5000 // Log a snapshot every 5 seconds

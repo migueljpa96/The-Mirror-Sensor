@@ -39,14 +39,14 @@
         </activity>
 
         <service
-            android:name=".services.HolisticSensorService"
+            android:name=".services.MasterService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="microphone|location">
         </service>
 
         <service
-            android:name=".services.HolisticAccessibilityService"
+            android:name=".services.ScreenService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="true">
             <intent-filter>
@@ -58,7 +58,7 @@
         </service>
 
         <service
-            android:name=".services.NotificationSensor"
+            android:name=".services.NotificationService"
             android:label="The Mirror Notifications"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
             android:exported="true">

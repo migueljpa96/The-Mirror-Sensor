@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.google.firebase.storage.FirebaseStorage
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.tasks.await
 
 class DataUploadWorker(appContext: Context, workerParams: WorkerParameters) :
@@ -15,27 +16,44 @@ class DataUploadWorker(appContext: Context, workerParams: WorkerParameters) :
 
     override suspend fun doWork(): Result {
         Log.i(TAG, "🚀 Worker Started")
+
+        // 1. SAFETY PAUSE (The "Renaming Buffer")
+        // We give the BroadcastReceivers (Screen/Notifs) 2 seconds to finish renaming
+        // their temp files to TIMESTAMP_ID before we list the directory.
+        delay(2000)
+
+        // Use 'null' to scan the root files directory
         val filesDir = applicationContext.getExternalFilesDir(null) ?: return Result.failure()
 
-        val allFiles = filesDir.listFiles() ?: emptyArray()
+        // 2. SORTED LISTING (Context First, Trigger Last)
+        // We filter out temp files immediately, then sort so .m4a comes LAST.
+        val allFiles = filesDir.listFiles()
+            ?.filter { !it.name.startsWith("temp_") && it.length() > 0 }
+            ?.sortedWith(Comparator { f1, f2 ->
+                val isAudio1 = f1.name.endsWith(".m4a")
+                val isAudio2 = f2.name.endsWith(".m4a")
+
+                when {
+                    // If f1 is audio and f2 is not, f1 goes LAST (return 1)
+                    isAudio1 && !isAudio2 -> 1
+                    // If f1 is not audio and f2 is, f1 goes FIRST (return -1)
+                    !isAudio1 && isAudio2 -> -1
+                    // Otherwise sort alphabetically
+                    else -> f1.name.compareTo(f2.name)
+                }
+            })
+            ?: emptyList()
+
+        if (allFiles.isEmpty()) {
+            Log.d(TAG, "📭 No files to upload.")
+            return Result.success()
+        }
+
         var uploadCount = 0
-        var skippedCount = 0
 
         for (file in allFiles) {
-            val isTemp = file.name.startsWith("temp_")
-            val isValidType = file.name.endsWith(".m4a") || file.name.endsWith(".jsonl")
-
-            if (isTemp || !isValidType || file.length() == 0L) continue
-
-            // Stability Check Log
-            val age = System.currentTimeMillis() - file.lastModified()
-            if (age < 30_000) {
-                Log.d(TAG, "⏳ Skipping unstable file: ${file.name} (Age: ${age}ms)")
-                skippedCount++
-                continue
-            }
-
             try {
+                // 3. ROUTING
                 val cloudFolder = when {
                     file.name.endsWith(".m4a") -> "audio_raw"
                     file.name.contains("PHYSICAL") -> "physical_logs"
@@ -49,6 +67,10 @@ class DataUploadWorker(appContext: Context, workerParams: WorkerParameters) :
                 val fileUri = Uri.fromFile(file)
 
                 Log.d(TAG, "⬆️ Uploading: ${file.name} -> [$cloudFolder]")
+
+                // 4. BLOCKING UPLOAD
+                // Because of the sort above, we are guaranteed to upload Context logs
+                // BEFORE we upload the Audio file (which triggers the Cloud Function).
                 storageRef.putFile(fileUri).await()
 
                 if (file.delete()) {
@@ -58,10 +80,11 @@ class DataUploadWorker(appContext: Context, workerParams: WorkerParameters) :
 
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Upload Failed: ${file.name}", e)
+                // Retry next time
             }
         }
 
-        Log.i(TAG, "✅ Job Done. Uploaded: $uploadCount, Skipped (Unstable): $skippedCount")
+        Log.i(TAG, "✅ Job Done. Uploaded: $uploadCount")
         return Result.success()
     }
 
