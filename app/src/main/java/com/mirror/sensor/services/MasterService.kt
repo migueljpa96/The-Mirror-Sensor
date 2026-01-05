@@ -16,13 +16,16 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
-import com.mirror.sensor.services.PhysicalService
 import com.mirror.sensor.workers.DataUploadWorker
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+// Assuming you renamed PhysicalCollector -> PhysicalService based on your snippet
+// If not, just change this import back to your Collector class
+import com.mirror.sensor.services.PhysicalService
 
 class MasterService : Service() {
 
@@ -43,7 +46,7 @@ class MasterService : Service() {
         // 1. Initialize Helpers
         physicalManager = PhysicalService(this)
 
-        // 2. Acquire WakeLock (Critical for long-running recording)
+        // 2. Acquire WakeLock
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "TheMirror:HolisticLock")
         wakeLock?.acquire(RECORDING_INTERVAL_MS * 2)
@@ -61,10 +64,10 @@ class MasterService : Service() {
 
     private fun startRecordingSession() {
         try {
-            // A. Start Physical Sensors (Writes to temp_physical.jsonl)
+            // A. Start Physical Sensors
             physicalManager.startTracking()
 
-            // B. Prepare Temp Audio File (Root directory, visible to Worker)
+            // B. Prepare Temp Audio File
             tempAudioFile = File(getExternalFilesDir(null), TEMP_FILENAME)
 
             if (tempAudioFile?.exists() == true) {
@@ -101,14 +104,14 @@ class MasterService : Service() {
     }
 
     private fun rotateSession() {
-        // 1. Generate the Master Timestamp ID (e.g., 20260105_120000)
+        // 1. Generate Timestamp
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         Log.i(TAG, "🔄 ROTATING SESSION: $timestamp")
 
-        // 2. Stop Recording (Flushes data to temp_audio.m4a)
+        // 2. Stop Recording
         stopAndReleaseRecorder()
 
-        // 3. Rename Audio (temp_audio.m4a -> AUDIO_2026...m4a)
+        // 3. Rename Audio
         if (tempAudioFile?.exists() == true) {
             val finalName = "AUDIO_$timestamp.m4a"
             val finalFile = File(getExternalFilesDir(null), finalName)
@@ -120,23 +123,21 @@ class MasterService : Service() {
             }
         }
 
-        // 4. Rotate Physical Logs (Direct Call - OK)
+        // 4. Rotate Physical Logs
         physicalManager.rotateLogFile(timestamp)
 
-        // 5. Rotate Accessibility & Notification Logs (BROADCAST - THIS WAS MISSING)
-        // This tells the other services: "I just finished a session with ID X, rename your temp files to X now."
+        // 5. Rotate Accessibility & Notification Logs (BROADCAST)
         val intent = Intent("com.mirror.sensor.ROTATE_COMMAND")
-        intent.setPackage(packageName) // Security: Only our app receives this
+        intent.setPackage(packageName)
         intent.putExtra("TIMESTAMP_ID", timestamp)
         sendBroadcast(intent)
         Log.d(TAG, "📡 Sent Broadcast Rotation: $timestamp")
 
         // 6. Trigger Upload Worker
-        // The worker will see AUDIO_X, PHYSICAL_X, SCREEN_X, NOTIFS_X and upload them all.
         val uploadRequest = OneTimeWorkRequestBuilder<DataUploadWorker>().build()
         WorkManager.getInstance(this).enqueue(uploadRequest)
 
-        // 7. Start New Session (Creates new temp_audio.m4a)
+        // 7. Start New Session
         startRecordingSession()
     }
 
@@ -176,18 +177,44 @@ class MasterService : Service() {
     }
 
     override fun onDestroy() {
-        Log.w(TAG, "🛑 SERVICE DESTROYED - RELEASING RESOURCES")
+        Log.w(TAG, "🛑 SERVICE DESTROYED - INITIATING NUCLEAR CLEANUP")
+
+        // 1. Stop Active Components
         stopAndReleaseRecorder()
         physicalManager.stopTracking()
         handler.removeCallbacksAndMessages(null)
+
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
         }
 
-        // Cleanup temp file
-        if (tempAudioFile?.exists() == true) {
-            tempAudioFile?.delete()
+        // 2. DELETE ALL GENERATED FILES (Temp + Finalized)
+        // We scan the directory and wipe anything that looks like our data.
+        val filesDir = getExternalFilesDir(null)
+        val files = filesDir?.listFiles()
+
+        var deletedCount = 0
+        files?.forEach { file ->
+            val name = file.name
+
+            // Match: temp_*, AUDIO_*, PHYSICAL_*, SCREEN_*, NOTIFS_*
+            val isMirrorFile = name.startsWith("temp_") ||
+                    name.startsWith("AUDIO_") ||
+                    name.startsWith("PHYSICAL_") ||
+                    name.startsWith("SCREEN_") ||
+                    name.startsWith("NOTIFS_")
+
+            // Only delete logs/audio (safeguard against deleting other app data if any)
+            val isLogType = name.endsWith(".m4a") || name.endsWith(".jsonl")
+
+            if (isMirrorFile && isLogType) {
+                if (file.delete()) {
+                    deletedCount++
+                }
+            }
         }
+
+        Log.d(TAG, "🧹 Cleanup Complete: Deleted $deletedCount files from storage.")
 
         super.onDestroy()
     }
