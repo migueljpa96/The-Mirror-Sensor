@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoGraph
 import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
@@ -22,8 +22,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.mirror.sensor.ui.components.ControlCenterSheet
 import com.mirror.sensor.viewmodel.MainViewModel
-import com.mirror.sensor.viewmodel.SystemDashboardViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -35,12 +35,11 @@ fun MainScreen(
     val isRunning by viewModel.isServiceRunning.collectAsState()
     val haptic = LocalHapticFeedback.current
 
-    // UPDATED NAVIGATION: 4 Tabs
-    val topLevelRoutes = listOf("Stream", "Dashboard", "Patterns", "Oracle")
+    // NAVIGATION: 3 Main Tabs
+    val topLevelRoutes = listOf("Stream", "Patterns", "Oracle")
     val icons = listOf(
         Icons.Default.ViewStream,
-        Icons.Default.Dashboard,
-        Icons.Default.AutoGraph, // Patterns maintained
+        Icons.Default.AutoGraph,
         Icons.Default.Chat
     )
 
@@ -48,6 +47,9 @@ fun MainScreen(
     val currentRoute = navBackStackEntry?.destination?.route ?: "Stream"
 
     val showGlobalBars = currentRoute in topLevelRoutes || currentRoute == "Stream"
+
+    // CONTROL CENTER STATE
+    var showControlCenter by remember { mutableStateOf(false) }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -63,17 +65,33 @@ fun MainScreen(
                         )
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background,
-                        titleContentColor = MaterialTheme.colorScheme.onBackground
+                        containerColor = MaterialTheme.colorScheme.background
                     ),
                     actions = {
+                        // 1. SEARCH (Stream Only)
                         if (currentRoute == "Stream") {
                             IconButton(onClick = { navController.navigate("Recall") }) {
                                 Icon(Icons.Default.Search, contentDescription = "Search")
                             }
                         }
 
-                        // Toggle Service Button
+                        // 2. INSPECTOR (Opens Control Center)
+                        // This pulses/colors when active to show "Sensors Live"
+                        IconButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                showControlCenter = true
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.GraphicEq,
+                                contentDescription = "Sensor Status",
+                                tint = if (isRunning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        // 3. QUICK PLAY (Immediate Action)
+                        // High contrast button for muscle memory
                         FilledIconButton(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -83,11 +101,11 @@ fun MainScreen(
                                 containerColor = if (isRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                                 contentColor = if (isRunning) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary
                             ),
-                            modifier = Modifier.padding(end = 12.dp, start = 8.dp)
+                            modifier = Modifier.padding(end = 8.dp, start = 4.dp)
                         ) {
                             Icon(
                                 imageVector = if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
-                                contentDescription = "Toggle Service"
+                                contentDescription = "Toggle Recording"
                             )
                         }
                     }
@@ -118,50 +136,54 @@ fun MainScreen(
             }
         }
     ) { innerPadding ->
+
         NavHost(
             navController = navController,
             startDestination = "Stream",
             modifier = Modifier.padding(innerPadding)
         ) {
-            // NEW DASHBOARD SCREEN
-            composable("Dashboard") {
-                SystemDashboardScreen(
-                    isServiceRunning = isRunning,
-                    onToggleService = { onToggleService(isRunning) }
-                )
-            }
-
             composable("Stream") {
                 HomeScreen(
-                    isServiceRunning = isRunning,
-                    onMemoryClick = { memoryId ->
-                        navController.navigate("MemoryDetail/$memoryId")
-                    }
+                    isServiceRunning = isRunning, // Pass state, but visual logic is now in TopBar
+                    onMemoryClick = { memoryId -> navController.navigate("MemoryDetail/$memoryId") }
                 )
             }
-
-            // PATTERNS (Maintained)
             composable("Patterns") { PatternsScreen() }
-
             composable("Oracle") { OracleScreen() }
 
             composable("Recall") {
                 RecallScreen(
                     onBack = { navController.popBackStack() },
-                    onMemoryClick = { memoryId ->
-                        navController.navigate("MemoryDetail/$memoryId")
-                    }
+                    onMemoryClick = { id -> navController.navigate("MemoryDetail/$id") }
                 )
             }
-
             composable("MemoryDetail/{memoryId}") { backStackEntry ->
-                val memoryId = backStackEntry.arguments?.getString("memoryId") ?: return@composable
+                val id = backStackEntry.arguments?.getString("memoryId") ?: return@composable
                 MemoryDetailScreen(
-                    memoryId = memoryId,
+                    memoryId = id,
                     onBack = { navController.popBackStack() },
                     viewModel = androidx.lifecycle.viewmodel.compose.viewModel(
                         viewModelStoreOwner = (navController.context as androidx.activity.ComponentActivity)
                     )
+                )
+            }
+        }
+
+        // THE CONTROL CENTER SHEET
+        if (showControlCenter) {
+            ModalBottomSheet(
+                onDismissRequest = { showControlCenter = false },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                containerColor = MaterialTheme.colorScheme.surface,
+                tonalElevation = 0.dp
+            ) {
+                ControlCenterSheet(
+                    isServiceRunning = isRunning,
+                    onToggleService = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onToggleService(isRunning)
+                    },
+                    onDismiss = { showControlCenter = false }
                 )
             }
         }
