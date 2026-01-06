@@ -16,15 +16,13 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.mirror.sensor.managers.RealTimeSensorManager // <--- IMPORT THIS
 import com.mirror.sensor.workers.DataUploadWorker
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-
-// Assuming you renamed PhysicalCollector -> PhysicalService based on your snippet
-// If not, just change this import back to your Collector class
 import com.mirror.sensor.services.PhysicalService
 
 class MasterService : Service() {
@@ -33,28 +31,41 @@ class MasterService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var physicalManager: PhysicalService
 
-    // The Master Clock
+    // Timers
     private val handler = Handler(Looper.getMainLooper())
+
+    // --- NEW: Audio Polling ---
+    private val audioPollHandler = Handler(Looper.getMainLooper())
+    private val audioPollRunnable = object : Runnable {
+        override fun run() {
+            mediaRecorder?.let {
+                try {
+                    // Read Mic Volume
+                    val amp = it.maxAmplitude
+                    RealTimeSensorManager.updateAmplitude(amp)
+                } catch (e: Exception) {
+                    // Ignore transient errors
+                }
+            }
+            // Repeat every 50ms (20 FPS)
+            audioPollHandler.postDelayed(this, 50)
+        }
+    }
+
     private var tempAudioFile: File? = null
-    private val RECORDING_INTERVAL_MS = 10 * 60 * 1000L // 10 Minutes
+    private val RECORDING_INTERVAL_MS = 10 * 60 * 1000L
     private val TEMP_FILENAME = "temp_audio.m4a"
 
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "🟢 Service Created")
-
-        // 1. Initialize Helpers
         physicalManager = PhysicalService(this)
 
-        // 2. Acquire WakeLock
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "TheMirror:HolisticLock")
         wakeLock?.acquire(RECORDING_INTERVAL_MS * 2)
 
-        // 3. Start Notification
         startForegroundServiceNotification()
-
-        // 4. Begin the Cycle
         startRecordingSession()
     }
 
@@ -64,17 +75,10 @@ class MasterService : Service() {
 
     private fun startRecordingSession() {
         try {
-            // A. Start Physical Sensors
             physicalManager.startTracking()
-
-            // B. Prepare Temp Audio File
             tempAudioFile = File(getExternalFilesDir(null), TEMP_FILENAME)
+            if (tempAudioFile?.exists() == true) tempAudioFile?.delete()
 
-            if (tempAudioFile?.exists() == true) {
-                tempAudioFile?.delete()
-            }
-
-            // C. Configure Recorder
             mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(this)
             } else {
@@ -92,9 +96,10 @@ class MasterService : Service() {
                 start()
             }
 
-            Log.d(TAG, "🎙️ Recording Started: $TEMP_FILENAME")
+            // --- START POLLING ---
+            audioPollHandler.post(audioPollRunnable) // <--- Start the visualizer data
 
-            // D. Schedule Rotation
+            Log.d(TAG, "🎙️ Recording Started: $TEMP_FILENAME")
             handler.postDelayed({ rotateSession() }, RECORDING_INTERVAL_MS)
 
         } catch (e: IOException) {
@@ -104,44 +109,35 @@ class MasterService : Service() {
     }
 
     private fun rotateSession() {
-        // 1. Generate Timestamp
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         Log.i(TAG, "🔄 ROTATING SESSION: $timestamp")
 
-        // 2. Stop Recording
         stopAndReleaseRecorder()
 
-        // 3. Rename Audio
         if (tempAudioFile?.exists() == true) {
             val finalName = "AUDIO_$timestamp.m4a"
             val finalFile = File(getExternalFilesDir(null), finalName)
-
-            if (tempAudioFile!!.renameTo(finalFile)) {
-                Log.d(TAG, "✅ Audio Sealed: $finalName")
-            } else {
-                Log.e(TAG, "❌ Failed to rename audio file!")
-            }
+            if (tempAudioFile!!.renameTo(finalFile)) Log.d(TAG, "✅ Audio Sealed: $finalName")
         }
 
-        // 4. Rotate Physical Logs
         physicalManager.rotateLogFile(timestamp)
 
-        // 5. Rotate Accessibility & Notification Logs (BROADCAST)
         val intent = Intent("com.mirror.sensor.ROTATE_COMMAND")
         intent.setPackage(packageName)
         intent.putExtra("TIMESTAMP_ID", timestamp)
         sendBroadcast(intent)
-        Log.d(TAG, "📡 Sent Broadcast Rotation: $timestamp")
 
-        // 6. Trigger Upload Worker
         val uploadRequest = OneTimeWorkRequestBuilder<DataUploadWorker>().build()
         WorkManager.getInstance(this).enqueue(uploadRequest)
 
-        // 7. Start New Session
         startRecordingSession()
     }
 
     private fun stopAndReleaseRecorder() {
+        // --- STOP POLLING ---
+        audioPollHandler.removeCallbacks(audioPollRunnable) // <--- Stop updates
+        RealTimeSensorManager.updateAmplitude(0) // Reset UI to 0
+
         try {
             mediaRecorder?.apply {
                 stop()
@@ -157,7 +153,6 @@ class MasterService : Service() {
     private fun startForegroundServiceNotification() {
         val channelId = "mirror_sensor_channel"
         val channelName = "Holistic Sensor"
-
         val chan = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_LOW)
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(chan)
@@ -177,19 +172,18 @@ class MasterService : Service() {
     }
 
     override fun onDestroy() {
-        Log.w(TAG, "🛑 SERVICE DESTROYED - INITIATING NUCLEAR CLEANUP")
+        Log.w(TAG, "🛑 SERVICE DESTROYED")
 
         // 1. Stop Active Components
         stopAndReleaseRecorder()
         physicalManager.stopTracking()
         handler.removeCallbacksAndMessages(null)
-
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
         }
 
-        // 2. DELETE ALL GENERATED FILES (Temp + Finalized)
-        // We scan the directory and wipe anything that looks like our data.
+        // 2. SAFE CLEANUP: Only delete TEMP files.
+        // Leave sealed "AUDIO_"/"SCREEN_" files for the DataUploadWorker to handle.
         val filesDir = getExternalFilesDir(null)
         val files = filesDir?.listFiles()
 
@@ -197,24 +191,15 @@ class MasterService : Service() {
         files?.forEach { file ->
             val name = file.name
 
-            // Match: temp_*, AUDIO_*, PHYSICAL_*, SCREEN_*, NOTIFS_*
-            val isMirrorFile = name.startsWith("temp_") ||
-                    name.startsWith("AUDIO_") ||
-                    name.startsWith("PHYSICAL_") ||
-                    name.startsWith("SCREEN_") ||
-                    name.startsWith("NOTIFS_")
-
-            // Only delete logs/audio (safeguard against deleting other app data if any)
-            val isLogType = name.endsWith(".m4a") || name.endsWith(".jsonl")
-
-            if (isMirrorFile && isLogType) {
+            // ONLY target files starting with "temp_"
+            if (name.startsWith("temp_")) {
                 if (file.delete()) {
                     deletedCount++
                 }
             }
         }
 
-        Log.d(TAG, "🧹 Cleanup Complete: Deleted $deletedCount files from storage.")
+        Log.d(TAG, "🧹 Cleanup Complete: Deleted $deletedCount temp files. Preserved finalized data.")
 
         super.onDestroy()
     }

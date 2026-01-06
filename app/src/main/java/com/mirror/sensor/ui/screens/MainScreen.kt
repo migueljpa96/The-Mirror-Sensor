@@ -22,6 +22,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.mirror.sensor.viewmodel.MainViewModel
+import androidx.compose.ui.platform.LocalHapticFeedback // Add Import
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType // Add Import
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,6 +41,8 @@ fun MainScreen(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: "Stream"
     val showGlobalBars = currentRoute in topLevelRoutes || currentRoute == "Stream"
+
+    val haptic = LocalHapticFeedback.current // <--- 1. Get Haptic Engine
 
     Scaffold(
         // FIX: We remove the invalid 'resizeToAvoidBottomInset' parameter.
@@ -61,7 +65,10 @@ fun MainScreen(
                     ),
                     actions = {
                         FilledIconButton(
-                            onClick = { onToggleService(isRunning) },
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress) // <--- 2. Vibrate on Click
+                                onToggleService(isRunning)
+                            },
                             colors = IconButtonDefaults.filledIconButtonColors(
                                 containerColor = if (isRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                                 contentColor = if (isRunning) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary

@@ -20,26 +20,31 @@ import com.mirror.sensor.data.model.Memory
 import java.text.SimpleDateFormat
 import java.util.Locale
 
+// --- SHARED COLOR LOGIC ---
+// Public function so TimelineItem can use the exact same color
+fun getStressColor(stressLevel: Double): Color {
+    return when {
+        stressLevel > 0.8 -> Color(0xFFD32F2F) // High Stress (Red)
+        stressLevel > 0.5 -> Color(0xFFF57C00) // Moderate (Orange)
+        else -> Color(0xFF388E3C)              // Flow/Calm (Green)
+    }
+}
+
 @Composable
 fun MemoryCard(memory: Memory, onClick: () -> Unit) {
-    // 1. Color Psychology: Visualize Stress Level
-    val stress = memory.psychological_profile.stress_level
-    val moodColor = when {
-        stress > 0.8 -> Color(0xFFD32F2F) // High Stress (Red)
-        stress > 0.5 -> Color(0xFFF57C00) // Moderate (Orange)
-        else -> Color(0xFF388E3C) // Flow/Calm (Green)
-    }
+    // 1. Get Color from shared logic
+    val moodColor = getStressColor(memory.psychological_profile.stress_level)
 
     Card(
         onClick = onClick,
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 6.dp, horizontal = 16.dp),
+            .fillMaxWidth(),
+        // Remove horizontal padding here since TimelineItem handles spacing
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Row(modifier = Modifier.height(IntrinsicSize.Min)) {
-            // The "Mood Strip" on the left
+            // The "Mood Strip"
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
@@ -89,9 +94,14 @@ fun MemoryCard(memory: Memory, onClick: () -> Unit) {
 
                 // Data Context Row
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Energy
-                    val energy = (memory.psychological_profile.energy_level * 100).toInt()
-                    InfoChip(Icons.Default.Bolt, "$energy%")
+                    // Energy: Converted to Text
+                    val energyLevel = memory.psychological_profile.energy_level
+                    val energyText = when {
+                        energyLevel > 0.7 -> "High"
+                        energyLevel > 0.3 -> "Medium"
+                        else -> "Low"
+                    }
+                    InfoChip(Icons.Default.Bolt, energyText)
 
                     Spacer(modifier = Modifier.width(12.dp))
 
