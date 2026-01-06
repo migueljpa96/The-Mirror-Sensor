@@ -17,6 +17,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -35,10 +36,12 @@ fun MainScreen(
     val isRunning by viewModel.isServiceRunning.collectAsState()
     val haptic = LocalHapticFeedback.current
 
-    val topLevelRoutes = listOf("Stream", "Patterns", "Oracle")
+    // NAVIGATION: Updated Tab List
+    // "Patterns" -> "Reflection"
+    val topLevelRoutes = listOf("Stream", "Reflection", "Oracle")
     val icons = listOf(
         Icons.Default.ViewStream,
-        Icons.Default.AutoGraph,
+        Icons.Default.AutoGraph, // Using AutoGraph for Reflection/Insights
         Icons.Default.Chat
     )
 
@@ -58,9 +61,10 @@ fun MainScreen(
                 TopAppBar(
                     title = {
                         Text(
-                            currentRoute,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold
+                            currentRoute.uppercase(),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 2.sp
                         )
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -142,11 +146,21 @@ fun MainScreen(
             composable("Stream") {
                 HomeScreen(
                     isServiceRunning = isRunning,
-                    onOpenControlCenter = { showControlCenter = true }, // <--- CONNECTED HERE
+                    onOpenControlCenter = { showControlCenter = true },
                     onMemoryClick = { memoryId -> navController.navigate("MemoryDetail/$memoryId") }
                 )
             }
-            composable("Patterns") { PatternsScreen() }
+
+            // NEW: REFLECTION SCREEN
+            composable("Reflection") {
+                ReflectionScreen(
+                    // Pass Activity-scoped HomeViewModel to share memory data
+                    homeViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+                        viewModelStoreOwner = (navController.context as androidx.activity.ComponentActivity)
+                    )
+                )
+            }
+
             composable("Oracle") { OracleScreen() }
 
             composable("Recall") {
