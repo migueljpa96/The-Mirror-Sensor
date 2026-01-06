@@ -35,12 +35,14 @@ fun HomeScreen(
     onMemoryClick: (String) -> Unit
 ) {
     val memories by viewModel.memories.collectAsState()
+
+    // 1. RESTORED: Live Audio Data
     val liveAmplitude by viewModel.audioLevel.collectAsState()
 
-    // UI State for filtering
+    // UI State
     var selectedDate by remember { mutableStateOf(Date()) }
 
-    // FILTER LOGIC: Filter by Date -> Then Sort
+    // Filter Logic
     val filteredMemories = remember(memories, selectedDate) {
         memories.filter { memory ->
             val memDate = memory.anchor_date?.toDate()
@@ -50,8 +52,7 @@ fun HomeScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
 
-        // 1. LIVE STATUS (Pinned to top, visible even if paused)
-        // FIX: Removed the "if (isServiceRunning)" check so it shows Paused state too
+        // 2. RESTORED: The "Rich" Status Card
         RecordingStatusCard(
             isRecording = isServiceRunning,
             amplitude = if (isServiceRunning) liveAmplitude else 0f
@@ -61,17 +62,17 @@ fun HomeScreen(
             contentPadding = PaddingValues(bottom = 24.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            // 2. HEADER
+            // Header
             item {
                 Text(
-                    "Your Journey",
+                    "Your Stream",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(start = 24.dp, top = 16.dp, bottom = 16.dp)
                 )
             }
 
-            // 3. CALENDAR STRIP
+            // Date Selector
             item {
                 DateSelector(
                     selectedDate = selectedDate,
@@ -80,7 +81,7 @@ fun HomeScreen(
                 Spacer(modifier = Modifier.height(24.dp))
             }
 
-            // 4. THE STREAM
+            // Timeline
             if (filteredMemories.isEmpty()) {
                 item { EmptyStateView(selectedDate) }
             } else {
@@ -100,13 +101,7 @@ fun HomeScreen(
     }
 }
 
-// --- HELPER: Date Comparison ---
-private fun isSameDay(d1: Date, d2: Date): Boolean {
-    val fmt = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
-    return fmt.format(d1) == fmt.format(d2)
-}
-
-// --- COMPONENTS ---
+// --- RESTORED VISUAL COMPONENTS ---
 
 @Composable
 fun RecordingStatusCard(isRecording: Boolean, amplitude: Float) {
@@ -129,7 +124,7 @@ fun RecordingStatusCard(isRecording: Boolean, amplitude: Float) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // LEFT: Status Text & Icon
+            // LEFT: Status Info
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (isRecording) {
                     PulsingRedDot()
@@ -156,7 +151,7 @@ fun RecordingStatusCard(isRecording: Boolean, amplitude: Float) {
                 }
             }
 
-            // RIGHT: Audio Visualizer (Only visible when recording)
+            // RIGHT: The Audio Visualizer
             if (isRecording) {
                 AudioVisualizer(amplitude = amplitude, color = contentColor)
             }
@@ -213,10 +208,16 @@ fun VisualizerBar(amplitude: Float, scaleFactor: Float, color: Color) {
     )
 }
 
+// Helper & Empty State
+private fun isSameDay(d1: Date, d2: Date): Boolean {
+    val fmt = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
+    return fmt.format(d1) == fmt.format(d2)
+}
+
 @Composable
 fun EmptyStateView(date: Date) {
     val isToday = isSameDay(date, Date())
-    val text = if (isToday) "No memories yet today." else "No memories found for this day."
+    val message = if (isToday) "No memories yet today." else "No memories found for this day."
 
     Column(
         modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
@@ -231,7 +232,7 @@ fun EmptyStateView(date: Date) {
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = text,
+            text = message,
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.outline
         )
