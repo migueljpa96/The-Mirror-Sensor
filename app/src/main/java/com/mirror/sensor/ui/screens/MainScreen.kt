@@ -1,6 +1,7 @@
 package com.mirror.sensor.ui.screens
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -31,22 +32,21 @@ fun MainScreen(
     val navController = rememberNavController()
     val isRunning by viewModel.isServiceRunning.collectAsState()
 
-    // 1. Define Top-Level Routes (Where we want the Bottom Bar)
     val topLevelRoutes = listOf("Stream", "Patterns", "Oracle")
-
     val items = topLevelRoutes
     val icons = listOf(Icons.Default.ViewStream, Icons.Default.AutoGraph, Icons.Default.Chat)
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: "Stream"
-
-    // 2. Logic: Only show global bars on top-level screens
-    // If we are in "MemoryDetail/...", we hide them.
     val showGlobalBars = currentRoute in topLevelRoutes || currentRoute == "Stream"
 
     Scaffold(
+        // FIX: We remove the invalid 'resizeToAvoidBottomInset' parameter.
+        // Instead, we pass '0' for the bottom inset to prevent automatic resizing.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+
         topBar = {
-            if (showGlobalBars) { // <--- CONDITIONAL VISIBILITY
+            if (showGlobalBars) {
                 TopAppBar(
                     title = {
                         Text(
@@ -78,7 +78,7 @@ fun MainScreen(
             }
         },
         bottomBar = {
-            if (showGlobalBars) { // <--- CONDITIONAL VISIBILITY
+            if (showGlobalBars) {
                 NavigationBar {
                     items.forEachIndexed { index, screen ->
                         NavigationBarItem(
@@ -101,7 +101,8 @@ fun MainScreen(
         NavHost(
             navController = navController,
             startDestination = "Stream",
-            // If bars are hidden, innerPadding is 0, so content uses full screen
+            // We still respect top/bottom padding for the bars, but relying on
+            // OracleScreen to handle the keyboard padding itself.
             modifier = Modifier.padding(innerPadding)
         ) {
             composable("Stream") {
@@ -113,13 +114,11 @@ fun MainScreen(
                 )
             }
             composable("Patterns") { PatternsScreen() }
+
             composable("Oracle") {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                    Text("Oracle Coming Soon...", style = MaterialTheme.typography.bodyLarge)
-                }
+                OracleScreen()
             }
 
-            // Detail Screen (Takes over the whole screen)
             composable("MemoryDetail/{memoryId}") { backStackEntry ->
                 val memoryId = backStackEntry.arguments?.getString("memoryId") ?: return@composable
                 MemoryDetailScreen(

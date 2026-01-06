@@ -1,45 +1,80 @@
 package com.mirror.sensor.viewmodel
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.Query
-import com.mirror.sensor.data.model.DailySummary
+import androidx.lifecycle.viewModelScope
+import com.mirror.sensor.data.model.Memory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import java.util.Calendar
+import java.util.Date
 
 class PatternsViewModel : ViewModel() {
 
-    private val db = FirebaseFirestore.getInstance()
+    private val _stats = MutableStateFlow(DailyStats())
+    val stats: StateFlow<DailyStats> = _stats.asStateFlow()
 
-    // UI State: The latest daily summary
-    private val _latestSummary = MutableStateFlow<DailySummary?>(null)
-    val latestSummary: StateFlow<DailySummary?> = _latestSummary
+    fun calculateStats(memories: List<Memory>) {
+        viewModelScope.launch {
+            if (memories.isEmpty()) return@launch
 
-    init {
-        listenToPatterns()
-    }
+            // 1. Sort by time
+            val sorted = memories.sortedBy { it.anchor_date?.toDate() ?: Date() }
 
-    private fun listenToPatterns() {
-        // Get the single most recent summary
-        db.collection("daily_summaries")
-            .orderBy("date", Query.Direction.DESCENDING)
-            .limit(1)
-            .addSnapshotListener { snapshot, e ->
-                if (e != null) {
-                    Log.e("TheMirrorPatterns", "Listen failed.", e)
-                    return@addSnapshotListener
-                }
+            // 2. Extract Hourly Data points (0..23)
+            val stressPoints = MutableList(24) { 0f }
+            val energyPoints = MutableList(24) { 0f }
+            val counts = MutableList(24) { 0 }
 
-                if (snapshot != null && !snapshot.isEmpty) {
-                    val doc = snapshot.documents[0]
-                    try {
-                        val summary = doc.toObject(DailySummary::class.java)
-                        _latestSummary.value = summary
-                    } catch (e: Exception) {
-                        Log.e("TheMirrorPatterns", "Malformed summary", e)
-                    }
-                }
+            sorted.forEach { memory ->
+                val date = memory.anchor_date?.toDate() ?: return@forEach
+                val cal = Calendar.getInstance()
+                cal.time = date
+                val hour = cal.get(Calendar.HOUR_OF_DAY)
+
+                stressPoints[hour] += memory.psychological_profile.stress_level.toFloat()
+                energyPoints[hour] += memory.psychological_profile.energy_level.toFloat()
+                counts[hour]++
             }
+
+            // Average the points
+            val finalStress = stressPoints.mapIndexed { index, total ->
+                if (counts[index] > 0) total / counts[index] else 0f
+            }
+            val finalEnergy = energyPoints.mapIndexed { index, total ->
+                if (counts[index] > 0) total / counts[index] else 0f
+            }
+
+            // 3. Activity Distribution
+            val activities = sorted.groupingBy { it.primary_activity.label }
+                .eachCount()
+                .toList()
+                .sortedByDescending { it.second }
+                .take(5) // Top 5
+
+            // 4. Dominant Emotions
+            val emotions = sorted.groupingBy { it.psychological_profile.dominant_emotion }
+                .eachCount()
+                .toList()
+                .sortedByDescending { it.second }
+                .take(4)
+
+            _stats.value = DailyStats(
+                stressTrend = finalStress,
+                energyTrend = finalEnergy,
+                topActivities = activities,
+                topEmotions = emotions,
+                totalMemories = sorted.size
+            )
+        }
     }
 }
+
+data class DailyStats(
+    val stressTrend: List<Float> = emptyList(),
+    val energyTrend: List<Float> = emptyList(),
+    val topActivities: List<Pair<String, Int>> = emptyList(),
+    val topEmotions: List<Pair<String, Int>> = emptyList(),
+    val totalMemories: Int = 0
+)
