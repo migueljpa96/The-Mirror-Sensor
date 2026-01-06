@@ -5,21 +5,32 @@ import androidx.lifecycle.ViewModel
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.mirror.sensor.data.model.Memory
-import com.mirror.sensor.managers.RealTimeSensorManager // <--- Import
+import com.mirror.sensor.managers.RealTimeSensorManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.util.Date
 
 class HomeViewModel : ViewModel() {
 
     private val db = FirebaseFirestore.getInstance()
+
+    // 1. MEMORIES STATE
     private val _memories = MutableStateFlow<List<Memory>>(emptyList())
     val memories: StateFlow<List<Memory>> = _memories
 
-    // --- LIVE AUDIO STREAM ---
-    val audioLevel = RealTimeSensorManager.audioLevel // Pass through to UI
+    // 2. SELECTED DATE STATE (Persists across navigation)
+    private val _selectedDate = MutableStateFlow(Date())
+    val selectedDate: StateFlow<Date> = _selectedDate
+
+    // 3. LIVE AUDIO
+    val audioLevel = RealTimeSensorManager.audioLevel
 
     init {
         subscribeToConsciousness()
+    }
+
+    fun updateSelectedDate(date: Date) {
+        _selectedDate.value = date
     }
 
     private fun subscribeToConsciousness() {

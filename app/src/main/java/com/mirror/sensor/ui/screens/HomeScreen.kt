@@ -28,15 +28,18 @@ import java.util.Locale
 fun HomeScreen(
     viewModel: HomeViewModel = viewModel(),
     isServiceRunning: Boolean = false,
-    onOpenControlCenter: () -> Unit, // <--- NEW PARAMETER
+    onOpenControlCenter: () -> Unit,
     onMemoryClick: (String) -> Unit
 ) {
     val memories by viewModel.memories.collectAsState()
     val audioLevel by viewModel.audioLevel.collectAsState()
+
+    // CHANGED: Observe date from ViewModel instead of local state
+    val selectedDate by viewModel.selectedDate.collectAsState()
+
     val haptic = LocalHapticFeedback.current
 
-    var selectedDate by remember { mutableStateOf(Date()) }
-
+    // Filter Logic
     val filteredMemories = remember(memories, selectedDate) {
         memories.filter { memory ->
             val memDate = memory.anchor_date?.toDate()
@@ -66,7 +69,10 @@ fun HomeScreen(
             item {
                 DateSelector(
                     selectedDate = selectedDate,
-                    onDateSelected = { selectedDate = it }
+                    onDateSelected = { newDate ->
+                        // CHANGED: Update ViewModel
+                        viewModel.updateSelectedDate(newDate)
+                    }
                 )
                 Spacer(modifier = Modifier.height(24.dp))
             }
@@ -79,9 +85,8 @@ fun HomeScreen(
                             isRecording = isServiceRunning,
                             audioLevel = audioLevel,
                             onClick = {
-                                // HAPTIC FEEDBACK + ACTION
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                onOpenControlCenter() // <--- Trigger the sheet
+                                onOpenControlCenter()
                             }
                         )
                     }
@@ -93,7 +98,6 @@ fun HomeScreen(
                 if (!isToday) {
                     item { EmptyStateView(selectedDate) }
                 } else if (filteredMemories.isEmpty()) {
-                    // Subtle hint below live card
                     item {
                         Box(Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
                             Text("No archives yet today.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
