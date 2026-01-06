@@ -14,11 +14,10 @@ import com.mirror.sensor.data.model.Memory
 
 @Composable
 fun TimelineItem(
-    memory: Memory, // Need memory to calculate color
+    memory: Memory,
     isLast: Boolean,
     content: @Composable () -> Unit
 ) {
-    // SYNC COLOR: Use the exact same logic as MemoryCard
     val dotColor = getStressColor(memory.psychological_profile.stress_level)
 
     Row(
@@ -30,29 +29,29 @@ fun TimelineItem(
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
-                .width(56.dp)
+                .width(48.dp) // Slightly slimmer track width
                 .fillMaxHeight()
         ) {
             // Top Line
             Box(
                 modifier = Modifier
-                    .width(2.dp)
+                    .width(1.dp) // Thinner elegant line
                     .weight(1f)
                     .background(MaterialTheme.colorScheme.surfaceVariant)
             )
 
-            // The Node (Dot) -> COLORED BY STRESS
+            // The Node (Dot)
             Box(
                 modifier = Modifier
-                    .size(12.dp)
+                    .size(10.dp) // Smaller, sharper dot
                     .clip(CircleShape)
-                    .background(dotColor) // <--- SYNCED COLOR
+                    .background(dotColor)
             )
 
             // Bottom Line
             Box(
                 modifier = Modifier
-                    .width(2.dp)
+                    .width(1.dp)
                     .weight(1f)
                     .background(if (isLast) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant)
             )
@@ -62,7 +61,7 @@ fun TimelineItem(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .padding(bottom = 24.dp, end = 16.dp)
+                .padding(bottom = 16.dp, end = 16.dp)
         ) {
             content()
         }

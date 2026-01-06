@@ -35,14 +35,10 @@ fun HomeScreen(
     onMemoryClick: (String) -> Unit
 ) {
     val memories by viewModel.memories.collectAsState()
-
-    // 1. RESTORED: Live Audio Data
     val liveAmplitude by viewModel.audioLevel.collectAsState()
 
-    // UI State
     var selectedDate by remember { mutableStateOf(Date()) }
 
-    // Filter Logic
     val filteredMemories = remember(memories, selectedDate) {
         memories.filter { memory ->
             val memDate = memory.anchor_date?.toDate()
@@ -50,9 +46,9 @@ fun HomeScreen(
         }.sortedByDescending { it.anchor_date?.toDate() }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
 
-        // 2. RESTORED: The "Rich" Status Card
+        // 1. STATUS CARD (Top Element)
         RecordingStatusCard(
             isRecording = isServiceRunning,
             amplitude = if (isServiceRunning) liveAmplitude else 0f
@@ -62,17 +58,17 @@ fun HomeScreen(
             contentPadding = PaddingValues(bottom = 24.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            // Header
+            // 2. HEADER
             item {
                 Text(
                     "Your Stream",
-                    style = MaterialTheme.typography.headlineMedium,
+                    style = MaterialTheme.typography.headlineSmall, // Scaled down slightly for elegance
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(start = 24.dp, top = 16.dp, bottom = 16.dp)
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
                 )
             }
 
-            // Date Selector
+            // 3. DATE SELECTOR
             item {
                 DateSelector(
                     selectedDate = selectedDate,
@@ -81,7 +77,7 @@ fun HomeScreen(
                 Spacer(modifier = Modifier.height(24.dp))
             }
 
-            // Timeline
+            // 4. TIMELINE
             if (filteredMemories.isEmpty()) {
                 item { EmptyStateView(selectedDate) }
             } else {
@@ -101,25 +97,25 @@ fun HomeScreen(
     }
 }
 
-// --- RESTORED VISUAL COMPONENTS ---
+// --- VISUAL COMPONENTS ---
 
 @Composable
 fun RecordingStatusCard(isRecording: Boolean, amplitude: Float) {
     val containerColor = if (isRecording) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
     val contentColor = if (isRecording) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-    val statusText = if (isRecording) "Observation Active" else "Observation Paused"
-    val icon = if (isRecording) Icons.Default.Mic else Icons.Default.Pause
+    val statusText = if (isRecording) "System Active" else "System Paused" // Changed text for "Tech" feel
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
         colors = CardDefaults.cardColors(containerColor = containerColor),
-        shape = RoundedCornerShape(16.dp)
+        shape = RoundedCornerShape(16.dp),
+        elevation = CardDefaults.cardElevation(0.dp) // Flat look
     ) {
         Row(
             modifier = Modifier
-                .padding(16.dp)
+                .padding(horizontal = 20.dp, vertical = 16.dp)
                 .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
@@ -128,11 +124,10 @@ fun RecordingStatusCard(isRecording: Boolean, amplitude: Float) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (isRecording) {
                     PulsingRedDot()
-                    Spacer(modifier = Modifier.width(12.dp))
                 } else {
-                    Icon(icon, null, tint = contentColor)
-                    Spacer(modifier = Modifier.width(12.dp))
+                    Icon(Icons.Default.Pause, null, tint = contentColor.copy(alpha = 0.5f), modifier = Modifier.size(10.dp))
                 }
+                Spacer(modifier = Modifier.width(12.dp))
 
                 Column {
                     Text(
@@ -143,7 +138,7 @@ fun RecordingStatusCard(isRecording: Boolean, amplitude: Float) {
                     )
                     if (isRecording) {
                         Text(
-                            text = "Listening...",
+                            text = "Monitoring environment...",
                             style = MaterialTheme.typography.bodySmall,
                             color = contentColor.copy(alpha = 0.7f)
                         )
@@ -151,7 +146,7 @@ fun RecordingStatusCard(isRecording: Boolean, amplitude: Float) {
                 }
             }
 
-            // RIGHT: The Audio Visualizer
+            // RIGHT: Audio Visualizer
             if (isRecording) {
                 AudioVisualizer(amplitude = amplitude, color = contentColor)
             }
@@ -170,7 +165,7 @@ fun PulsingRedDot() {
     Icon(
         imageVector = Icons.Default.FiberManualRecord,
         contentDescription = null,
-        tint = Color.Red.copy(alpha = alpha),
+        tint = MaterialTheme.colorScheme.error.copy(alpha = alpha),
         modifier = Modifier.size(12.dp)
     )
 }
@@ -178,21 +173,21 @@ fun PulsingRedDot() {
 @Composable
 fun AudioVisualizer(amplitude: Float, color: Color) {
     Row(
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp), // Tighter bars
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.height(24.dp)
+        modifier = Modifier.height(20.dp)
     ) {
-        VisualizerBar(amplitude, 0.6f, color)
+        VisualizerBar(amplitude, 0.5f, color)
         VisualizerBar(amplitude, 0.8f, color)
         VisualizerBar(amplitude, 1.0f, color)
         VisualizerBar(amplitude, 0.8f, color)
-        VisualizerBar(amplitude, 0.6f, color)
+        VisualizerBar(amplitude, 0.5f, color)
     }
 }
 
 @Composable
 fun VisualizerBar(amplitude: Float, scaleFactor: Float, color: Color) {
-    val targetHeight = (10.dp + (30.dp * amplitude * scaleFactor)).value.coerceIn(4f, 24f)
+    val targetHeight = (6.dp + (24.dp * amplitude * scaleFactor)).value.coerceIn(4f, 20f)
     val height by animateDpAsState(
         targetValue = targetHeight.dp,
         animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessLow),
@@ -201,14 +196,13 @@ fun VisualizerBar(amplitude: Float, scaleFactor: Float, color: Color) {
 
     Box(
         modifier = Modifier
-            .width(4.dp)
+            .width(3.dp)
             .height(height)
             .clip(RoundedCornerShape(50))
-            .background(color)
+            .background(color.copy(alpha = 0.8f))
     )
 }
 
-// Helper & Empty State
 private fun isSameDay(d1: Date, d2: Date): Boolean {
     val fmt = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
     return fmt.format(d1) == fmt.format(d2)
@@ -217,23 +211,22 @@ private fun isSameDay(d1: Date, d2: Date): Boolean {
 @Composable
 fun EmptyStateView(date: Date) {
     val isToday = isSameDay(date, Date())
-    val message = if (isToday) "No memories yet today." else "No memories found for this day."
+    val message = if (isToday) "No data intercepted yet." else "No archives found."
 
     Column(
         modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
-        verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(
             imageVector = Icons.Default.ViewStream,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.size(64.dp)
+            modifier = Modifier.size(48.dp)
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
             text = message,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.outline
         )
     }

@@ -1,28 +1,31 @@
 package com.mirror.sensor.ui.screens
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mirror.sensor.ui.components.MemoryCard
 import com.mirror.sensor.viewmodel.HomeViewModel
 import com.mirror.sensor.viewmodel.RecallViewModel
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun RecallScreen(
     onBack: () -> Unit,
@@ -30,112 +33,190 @@ fun RecallScreen(
     homeViewModel: HomeViewModel = viewModel(),
     recallViewModel: RecallViewModel = viewModel()
 ) {
-    // Connect Home Data to Recall Brain
+    // Sync Data
     val allMemories by homeViewModel.memories.collectAsState()
     LaunchedEffect(allMemories) {
         recallViewModel.loadMemories(allMemories)
     }
 
     val query by recallViewModel.searchQuery.collectAsState()
-    val active by recallViewModel.isActive.collectAsState()
     val results by recallViewModel.searchResults.collectAsState()
     val topics by recallViewModel.topics.collectAsState()
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            // SEARCH BAR (Takes over the top area)
-            SearchBar(
+        containerColor = MaterialTheme.colorScheme.background
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 20.dp, vertical = 16.dp)
+        ) {
+            // 1. CUSTOM COMMAND BAR
+            // Replaces the generic Material SearchBar with a cleaner input
+            RecallSearchBar(
                 query = query,
                 onQueryChange = { recallViewModel.onQueryChange(it) },
-                onSearch = { recallViewModel.onActiveChange(false) },
-                active = true, // Always "Expanded" style for this screen
-                onActiveChange = { }, // Handled manually
-                placeholder = { Text("Ask your memory...") },
-                leadingIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                trailingIcon = {
-                    if (query.isNotEmpty()) {
-                        IconButton(onClick = { recallViewModel.onQueryChange("") }) {
-                            Icon(Icons.Default.Close, contentDescription = "Clear")
-                        }
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                // SEARCH CONTENT AREA
-                if (query.isEmpty()) {
-                    // 1. EMPTY STATE: TOPIC CLOUD
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.TrendingUp, null, tint = MaterialTheme.colorScheme.primary)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                "Frequent Topics",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
+                onBack = onBack,
+                onClear = { recallViewModel.onQueryChange("") }
+            )
 
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            topics.forEach { topic ->
-                                SuggestionChip(
-                                    onClick = { recallViewModel.onTopicClick(topic) },
-                                    label = { Text(topic) },
-                                    colors = SuggestionChipDefaults.suggestionChipColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                                    )
-                                )
-                            }
-                        }
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // 2. CONTENT AREA
+            if (query.isEmpty()) {
+                // --- TOPIC CLOUD ---
+                Text(
+                    text = "DISCOVER CONTEXTS",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.5.sp
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    topics.forEach { topic ->
+                        TopicPill(
+                            text = topic,
+                            onClick = { recallViewModel.onTopicClick(topic) }
+                        )
+                    }
+                }
+            } else {
+                // --- SEARCH RESULTS ---
+                if (results.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No matching records.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.outline
+                        )
                     }
                 } else {
-                    // 2. RESULTS LIST
-                    if (results.isEmpty()) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        contentPadding = PaddingValues(bottom = 24.dp)
+                    ) {
+                        item {
                             Text(
-                                "No matching memories found.",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.outline
+                                text = "FOUND ${results.size} MATCHES",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp,
+                                modifier = Modifier.padding(bottom = 8.dp)
                             )
                         }
-                    } else {
-                        LazyColumn(
-                            contentPadding = PaddingValues(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            item {
-                                Text(
-                                    "Found ${results.size} memories",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            items(results) { memory ->
-                                MemoryCard(
-                                    memory = memory,
-                                    onClick = { onMemoryClick(memory.id) }
-                                )
-                            }
+                        items(results) { memory ->
+                            MemoryCard(
+                                memory = memory,
+                                onClick = { onMemoryClick(memory.id) }
+                            )
                         }
                     }
                 }
             }
         }
-    ) { innerPadding ->
-        // Background content (hidden by SearchBar usually, but good for safety)
-        Box(modifier = Modifier.padding(innerPadding))
+    }
+}
+
+// --- CUSTOM COMPONENTS ---
+
+@Composable
+fun RecallSearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onBack: () -> Unit,
+    onClear: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .background(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .padding(horizontal = 8.dp)
+    ) {
+        // Back Button
+        IconButton(onClick = onBack) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                tint = MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        // Input Field
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 8.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            if (query.isEmpty()) {
+                Text(
+                    text = "Recall a moment...",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                )
+            }
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                    color = MaterialTheme.colorScheme.onSurface
+                ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        // Action Icon (Clear or Search)
+        if (query.isNotEmpty()) {
+            IconButton(onClick = onClear) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Clear",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            Icon(
+                imageVector = Icons.Default.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.padding(end = 12.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun TopicPill(text: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
+        color = Color.Transparent, // Wireframe look
+    ) {
+        Text(
+            text = text.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+            letterSpacing = 0.5.sp
+        )
     }
 }
