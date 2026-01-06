@@ -20,9 +20,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.mirror.sensor.ui.components.DateSelector
 import com.mirror.sensor.ui.components.MemoryCard
 import com.mirror.sensor.ui.components.TimelineItem
 import com.mirror.sensor.viewmodel.HomeViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun HomeScreen(
@@ -31,44 +35,59 @@ fun HomeScreen(
     onMemoryClick: (String) -> Unit
 ) {
     val memories by viewModel.memories.collectAsState()
-
-    // Connect to Live Audio Data
     val liveAmplitude by viewModel.audioLevel.collectAsState()
+
+    // UI State for filtering
+    var selectedDate by remember { mutableStateOf(Date()) }
+
+    // FILTER LOGIC: Filter by Date -> Then Sort
+    val filteredMemories = remember(memories, selectedDate) {
+        memories.filter { memory ->
+            val memDate = memory.anchor_date?.toDate()
+            memDate != null && isSameDay(memDate, selectedDate)
+        }.sortedByDescending { it.anchor_date?.toDate() }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
 
-        // --- DYNAMIC STATUS CARD ---
+        // 1. LIVE STATUS (Pinned to top, visible even if paused)
+        // FIX: Removed the "if (isServiceRunning)" check so it shows Paused state too
         RecordingStatusCard(
             isRecording = isServiceRunning,
-            amplitude = liveAmplitude
+            amplitude = if (isServiceRunning) liveAmplitude else 0f
         )
 
-        if (memories.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        LazyColumn(
+            contentPadding = PaddingValues(bottom = 24.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            // 2. HEADER
+            item {
                 Text(
-                    text = "Waiting for data...",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.outline
+                    "Your Journey",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(start = 24.dp, top = 16.dp, bottom = 16.dp)
                 )
             }
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                item {
-                    Text(
-                        "Your Stream",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(start = 24.dp, bottom = 16.dp)
-                    )
-                }
 
-                itemsIndexed(memories) { index, memory ->
+            // 3. CALENDAR STRIP
+            item {
+                DateSelector(
+                    selectedDate = selectedDate,
+                    onDateSelected = { selectedDate = it }
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+
+            // 4. THE STREAM
+            if (filteredMemories.isEmpty()) {
+                item { EmptyStateView(selectedDate) }
+            } else {
+                itemsIndexed(filteredMemories) { index, memory ->
                     TimelineItem(
                         memory = memory,
-                        isLast = index == memories.lastIndex
+                        isLast = index == filteredMemories.lastIndex
                     ) {
                         MemoryCard(
                             memory = memory,
@@ -80,6 +99,14 @@ fun HomeScreen(
         }
     }
 }
+
+// --- HELPER: Date Comparison ---
+private fun isSameDay(d1: Date, d2: Date): Boolean {
+    val fmt = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
+    return fmt.format(d1) == fmt.format(d2)
+}
+
+// --- COMPONENTS ---
 
 @Composable
 fun RecordingStatusCard(isRecording: Boolean, amplitude: Float) {
@@ -104,7 +131,6 @@ fun RecordingStatusCard(isRecording: Boolean, amplitude: Float) {
         ) {
             // LEFT: Status Text & Icon
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // Pulsing Red Dot if recording
                 if (isRecording) {
                     PulsingRedDot()
                     Spacer(modifier = Modifier.width(12.dp))
@@ -156,16 +182,14 @@ fun PulsingRedDot() {
 
 @Composable
 fun AudioVisualizer(amplitude: Float, color: Color) {
-    // A simple visualizer with 5 bars that react to amplitude
     Row(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.height(24.dp)
     ) {
-        // We generate 5 bars with slightly different sensitivity to create a "Wave" look
         VisualizerBar(amplitude, 0.6f, color)
         VisualizerBar(amplitude, 0.8f, color)
-        VisualizerBar(amplitude, 1.0f, color) // Center bar reacts most
+        VisualizerBar(amplitude, 1.0f, color)
         VisualizerBar(amplitude, 0.8f, color)
         VisualizerBar(amplitude, 0.6f, color)
     }
@@ -173,7 +197,6 @@ fun AudioVisualizer(amplitude: Float, color: Color) {
 
 @Composable
 fun VisualizerBar(amplitude: Float, scaleFactor: Float, color: Color) {
-    // Smoothly animate the height
     val targetHeight = (10.dp + (30.dp * amplitude * scaleFactor)).value.coerceIn(4f, 24f)
     val height by animateDpAsState(
         targetValue = targetHeight.dp,
@@ -188,4 +211,29 @@ fun VisualizerBar(amplitude: Float, scaleFactor: Float, color: Color) {
             .clip(RoundedCornerShape(50))
             .background(color)
     )
+}
+
+@Composable
+fun EmptyStateView(date: Date) {
+    val isToday = isSameDay(date, Date())
+    val text = if (isToday) "No memories yet today." else "No memories found for this day."
+
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            imageVector = Icons.Default.ViewStream,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.size(64.dp)
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.outline
+        )
+    }
 }
