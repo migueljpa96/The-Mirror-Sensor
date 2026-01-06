@@ -8,12 +8,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoGraph
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search // <--- NEW IMPORT
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.ViewStream
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -22,8 +25,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.mirror.sensor.viewmodel.MainViewModel
-import androidx.compose.ui.platform.LocalHapticFeedback // Add Import
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType // Add Import
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,6 +34,7 @@ fun MainScreen(
 ) {
     val navController = rememberNavController()
     val isRunning by viewModel.isServiceRunning.collectAsState()
+    val haptic = LocalHapticFeedback.current
 
     val topLevelRoutes = listOf("Stream", "Patterns", "Oracle")
     val items = topLevelRoutes
@@ -40,13 +42,11 @@ fun MainScreen(
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: "Stream"
+
+    // Hide global bars for Detail AND Recall screens
     val showGlobalBars = currentRoute in topLevelRoutes || currentRoute == "Stream"
 
-    val haptic = LocalHapticFeedback.current // <--- 1. Get Haptic Engine
-
     Scaffold(
-        // FIX: We remove the invalid 'resizeToAvoidBottomInset' parameter.
-        // Instead, we pass '0' for the bottom inset to prevent automatic resizing.
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
 
         topBar = {
@@ -64,16 +64,24 @@ fun MainScreen(
                         titleContentColor = MaterialTheme.colorScheme.onBackground
                     ),
                     actions = {
+                        // 1. SEARCH ACTION (Only on Stream)
+                        if (currentRoute == "Stream") {
+                            IconButton(onClick = { navController.navigate("Recall") }) {
+                                Icon(Icons.Default.Search, contentDescription = "Search Memories")
+                            }
+                        }
+
+                        // 2. TOGGLE SERVICE ACTION
                         FilledIconButton(
                             onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress) // <--- 2. Vibrate on Click
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 onToggleService(isRunning)
                             },
                             colors = IconButtonDefaults.filledIconButtonColors(
                                 containerColor = if (isRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                                 contentColor = if (isRunning) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary
                             ),
-                            modifier = Modifier.padding(end = 12.dp)
+                            modifier = Modifier.padding(end = 12.dp, start = 8.dp)
                         ) {
                             Icon(
                                 imageVector = if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
@@ -108,8 +116,6 @@ fun MainScreen(
         NavHost(
             navController = navController,
             startDestination = "Stream",
-            // We still respect top/bottom padding for the bars, but relying on
-            // OracleScreen to handle the keyboard padding itself.
             modifier = Modifier.padding(innerPadding)
         ) {
             composable("Stream") {
@@ -121,9 +127,16 @@ fun MainScreen(
                 )
             }
             composable("Patterns") { PatternsScreen() }
+            composable("Oracle") { OracleScreen() }
 
-            composable("Oracle") {
-                OracleScreen()
+            // NEW: RECALL SCREEN
+            composable("Recall") {
+                RecallScreen(
+                    onBack = { navController.popBackStack() },
+                    onMemoryClick = { memoryId ->
+                        navController.navigate("MemoryDetail/$memoryId")
+                    }
+                )
             }
 
             composable("MemoryDetail/{memoryId}") { backStackEntry ->
