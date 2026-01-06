@@ -35,7 +35,6 @@ fun MainScreen(
     val isRunning by viewModel.isServiceRunning.collectAsState()
     val haptic = LocalHapticFeedback.current
 
-    // NAVIGATION: 3 Main Tabs
     val topLevelRoutes = listOf("Stream", "Patterns", "Oracle")
     val icons = listOf(
         Icons.Default.ViewStream,
@@ -68,15 +67,14 @@ fun MainScreen(
                         containerColor = MaterialTheme.colorScheme.background
                     ),
                     actions = {
-                        // 1. SEARCH (Stream Only)
+                        // 1. SEARCH
                         if (currentRoute == "Stream") {
                             IconButton(onClick = { navController.navigate("Recall") }) {
                                 Icon(Icons.Default.Search, contentDescription = "Search")
                             }
                         }
 
-                        // 2. INSPECTOR (Opens Control Center)
-                        // This pulses/colors when active to show "Sensors Live"
+                        // 2. INSPECTOR
                         IconButton(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -90,8 +88,7 @@ fun MainScreen(
                             )
                         }
 
-                        // 3. QUICK PLAY (Immediate Action)
-                        // High contrast button for muscle memory
+                        // 3. QUICK PLAY
                         FilledIconButton(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -144,7 +141,8 @@ fun MainScreen(
         ) {
             composable("Stream") {
                 HomeScreen(
-                    isServiceRunning = isRunning, // Pass state, but visual logic is now in TopBar
+                    isServiceRunning = isRunning,
+                    onOpenControlCenter = { showControlCenter = true }, // <--- CONNECTED HERE
                     onMemoryClick = { memoryId -> navController.navigate("MemoryDetail/$memoryId") }
                 )
             }
@@ -169,7 +167,6 @@ fun MainScreen(
             }
         }
 
-        // THE CONTROL CENTER SHEET
         if (showControlCenter) {
             ModalBottomSheet(
                 onDismissRequest = { showControlCenter = false },

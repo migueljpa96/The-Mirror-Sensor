@@ -9,10 +9,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mirror.sensor.ui.components.DateSelector
+import com.mirror.sensor.ui.components.LiveMemoryCard
+import com.mirror.sensor.ui.components.LiveTimelineItem
 import com.mirror.sensor.ui.components.MemoryCard
 import com.mirror.sensor.ui.components.TimelineItem
 import com.mirror.sensor.viewmodel.HomeViewModel
@@ -23,10 +27,13 @@ import java.util.Locale
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel = viewModel(),
-    isServiceRunning: Boolean = false, // Kept for API compatibility, but unused visually
+    isServiceRunning: Boolean = false,
+    onOpenControlCenter: () -> Unit, // <--- NEW PARAMETER
     onMemoryClick: (String) -> Unit
 ) {
     val memories by viewModel.memories.collectAsState()
+    val audioLevel by viewModel.audioLevel.collectAsState()
+    val haptic = LocalHapticFeedback.current
 
     var selectedDate by remember { mutableStateOf(Date()) }
 
@@ -36,6 +43,8 @@ fun HomeScreen(
             memDate != null && isSameDay(memDate, selectedDate)
         }.sortedByDescending { it.anchor_date?.toDate() }
     }
+
+    val isToday = isSameDay(selectedDate, Date())
 
     Column(modifier = Modifier.fillMaxSize()) {
 
@@ -62,9 +71,35 @@ fun HomeScreen(
                 Spacer(modifier = Modifier.height(24.dp))
             }
 
-            // 3. TIMELINE
+            // 3. LIVE SLOT (Always visible if Today)
+            if (isToday) {
+                item {
+                    LiveTimelineItem(isRecording = isServiceRunning) {
+                        LiveMemoryCard(
+                            isRecording = isServiceRunning,
+                            audioLevel = audioLevel,
+                            onClick = {
+                                // HAPTIC FEEDBACK + ACTION
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onOpenControlCenter() // <--- Trigger the sheet
+                            }
+                        )
+                    }
+                }
+            }
+
+            // 4. TIMELINE HISTORY
             if (filteredMemories.isEmpty()) {
-                item { EmptyStateView(selectedDate) }
+                if (!isToday) {
+                    item { EmptyStateView(selectedDate) }
+                } else if (filteredMemories.isEmpty()) {
+                    // Subtle hint below live card
+                    item {
+                        Box(Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
+                            Text("No archives yet today.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        }
+                    }
+                }
             } else {
                 itemsIndexed(filteredMemories) { index, memory ->
                     TimelineItem(
@@ -82,7 +117,6 @@ fun HomeScreen(
     }
 }
 
-// Helpers
 private fun isSameDay(d1: Date, d2: Date): Boolean {
     val fmt = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
     return fmt.format(d1) == fmt.format(d2)
@@ -90,9 +124,6 @@ private fun isSameDay(d1: Date, d2: Date): Boolean {
 
 @Composable
 fun EmptyStateView(date: Date) {
-    val isToday = isSameDay(date, Date())
-    val message = if (isToday) "No memories yet today." else "No memories found for this day."
-
     Column(
         modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -105,7 +136,7 @@ fun EmptyStateView(date: Date) {
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = message,
+            text = "No archives found for this date.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.outline
         )
