@@ -1,14 +1,11 @@
 package com.mirror.sensor.services
 
-import android.accessibilityservice.AccessibilityService
-import android.content.BroadcastReceiver
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
-import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -16,119 +13,95 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class ScreenService : AccessibilityService() {
+/**
+ * Handles "Digital Context" (App Usage/Focus).
+ * Refactored to use "SCREEN" naming convention to match DataUploadWorker.
+ */
+class ScreenService(private val context: Context) {
 
-    private var tempLogFile: File? = null
-    private var lastCapturedText: String = ""
-    private var lastCaptureTime: Long = 0
+    private var tempFile: File? = null
+    private var lastAppPackage: String = ""
 
-    // --- RECEIVER ---
-    private val rotationReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == "com.mirror.sensor.ROTATE_COMMAND") {
-                val timestamp = intent.getStringExtra("TIMESTAMP_ID")
-                if (timestamp != null) {
-                    rotateLogFile(timestamp)
-                }
-            }
+    private val handler = Handler(Looper.getMainLooper())
+    private var isRunning = false
+
+    // Poll every 2 seconds
+    private val pollRunnable = object : Runnable {
+        override fun run() {
+            if (!isRunning) return
+            checkCurrentApp()
+            handler.postDelayed(this, 2000)
         }
     }
 
-    override fun onServiceConnected() {
-        super.onServiceConnected()
-        Log.d(TAG, "Screen Sensor Connected")
-        tempLogFile = File(getExternalFilesDir(null), "temp_screen.jsonl")
+    fun startTracking() {
+        Log.d(TAG, "⚡ Screen Tracking Started")
+        isRunning = true
+        // RESTORED: Naming convention matches DataUploadWorker expectations
+        tempFile = File(context.getExternalFilesDir(null), "temp_screen.jsonl")
 
-        val filter = IntentFilter("com.mirror.sensor.ROTATE_COMMAND")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(rotationReceiver, filter, RECEIVER_NOT_EXPORTED)
-        }
+        handler.post(pollRunnable)
     }
 
-    private fun rotateLogFile(masterTimestamp: String) {
-        if (tempLogFile == null || !tempLogFile!!.exists() || tempLogFile!!.length() == 0L) return
+    fun stopTracking() {
+        isRunning = false
+        handler.removeCallbacks(pollRunnable)
+        Log.d(TAG, "🛑 Screen Tracking Stopped")
+    }
 
+    // Called by MasterService during rotation
+    fun rotateLogFile(masterTimestamp: String) {
+        if (tempFile == null || !tempFile!!.exists() || tempFile!!.length() == 0L) return
+
+        // RESTORED: Prefix "SCREEN_" ensures worker routes to 'screen_logs' folder
         val finalName = "SCREEN_$masterTimestamp.jsonl"
-        val finalFile = File(getExternalFilesDir(null), finalName)
+        val finalFile = File(context.getExternalFilesDir(null), finalName)
 
-        if (tempLogFile!!.renameTo(finalFile)) {
-            Log.d(TAG, "✅ Screen Synced: $finalName")
-            tempLogFile = File(getExternalFilesDir(null), "temp_screen.jsonl")
+        if (tempFile!!.renameTo(finalFile)) {
+            Log.d(TAG, "✅ Screen Log Sealed: $finalName")
+            tempFile = File(context.getExternalFilesDir(null), "temp_screen.jsonl")
         }
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null) return
-        val now = System.currentTimeMillis()
-
-        // Increased cooldown to 3 seconds to reduce log volume further
-        if (now - lastCaptureTime < 3000) return
-
-        // We only care about window state changes (App switching) or Content Changes
-        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
-            return
+    // Called by MasterService.onDestroy
+    fun cleanup() {
+        stopTracking()
+        if (tempFile?.exists() == true) {
+            val deleted = tempFile?.delete() ?: false
+            Log.d(TAG, "🧹 Temp Screen File Deleted: $deleted")
         }
+    }
 
-        val packageName = event.packageName?.toString() ?: return
+    private fun checkCurrentApp() {
+        val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val time = System.currentTimeMillis()
+        val events = usm.queryEvents(time - 5000, time)
+        val event = UsageEvents.Event()
 
-        // Ignore system noise
-        if (packageName == "com.android.systemui") return
-
-        // --- SIMPLIFIED CAPTURE ---
-        // Instead of reading the whole screen, we just log the App Name.
-        // If you want to log specific text (like a URL or Chat Name), we can be selective later.
-
-        if (packageName != lastCapturedText) { // Reuse variable for package name deduplication
-            lastCapturedText = packageName
-            lastCaptureTime = now
-
-            // COMMENTED OUT: Deep Text Extraction
-            /*
-            val source = event.source
-            val fullText = extractText(source)
-            if (fullText.isNotEmpty()) {
-                 writeLog(packageName, fullText)
+        var newPkg = ""
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                newPkg = event.packageName
             }
-            */
+        }
 
-            // NEW: Simple App Logging
-            Log.d(TAG, "👁️ App Switch: $packageName") // Log the switch
-            writeLog(packageName, "App Active")
+        if (newPkg.isNotEmpty() && newPkg != lastAppPackage) {
+            lastAppPackage = newPkg
+            logUsage(newPkg)
         }
     }
 
-    override fun onInterrupt() {
-    }
-
-    private fun extractText(node: AccessibilityNodeInfo?): String {
-        if (node == null) return ""
-        val sb = StringBuilder()
-        if (!node.text.isNullOrEmpty()) sb.append(node.text).append(" ")
-        if (!node.contentDescription.isNullOrEmpty()) sb.append(node.contentDescription).append(" ")
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i)
-            sb.append(extractText(child))
-            child?.recycle()
-        }
-        return sb.toString().trim()
-    }
-
-    private fun writeLog(pkg: String, text: String) {
-        if (tempLogFile == null) return
+    private fun logUsage(pkg: String) {
         val entry = JSONObject()
         entry.put("timestamp", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
-        entry.put("package", pkg)
-        entry.put("text", text)
+        entry.put("app_package", pkg)
+        entry.put("event", "FOREGROUND")
+
         try {
-            FileOutputStream(tempLogFile, true).use { it.write((entry.toString() + "\n").toByteArray()) }
+            FileOutputStream(tempFile, true).use { it.write((entry.toString() + "\n").toByteArray()) }
         } catch (e: Exception) { Log.e(TAG, "Write error", e) }
     }
 
-    override fun onDestroy() {
-        try { unregisterReceiver(rotationReceiver) } catch (e: Exception) {}
-        super.onDestroy()
-    }
-
-    companion object { const val TAG = "TheMirrorEye" }
+    companion object { const val TAG = "TheMirrorScreen" }
 }
