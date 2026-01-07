@@ -1,5 +1,6 @@
 package com.mirror.sensor.ui.screens
 
+import android.app.Activity
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -13,18 +14,22 @@ import androidx.compose.material.icons.filled.ViewStream
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.mirror.sensor.ui.components.ControlCenterSheet
+import com.mirror.sensor.viewmodel.HomeViewModel
 import com.mirror.sensor.viewmodel.MainViewModel
+import com.mirror.sensor.viewmodel.OracleViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,16 +37,26 @@ fun MainScreen(
     onToggleService: (Boolean) -> Unit,
     viewModel: MainViewModel = viewModel()
 ) {
+    // 1. CHECK ONBOARDING STATUS
+    val hasCompletedOnboarding by viewModel.hasCompletedOnboarding.collectAsState()
+
+    if (!hasCompletedOnboarding) {
+        OnboardingScreen(
+            onComplete = { viewModel.setOnboardingComplete() }
+        )
+        return
+    }
+
+    // 2. THE MAIN APP
     val navController = rememberNavController()
     val isRunning by viewModel.isServiceRunning.collectAsState()
     val haptic = LocalHapticFeedback.current
+    val context = LocalContext.current
 
-    // NAVIGATION: Updated Tab List
-    // "Patterns" -> "Reflection"
     val topLevelRoutes = listOf("Stream", "Reflection", "Oracle")
     val icons = listOf(
         Icons.Default.ViewStream,
-        Icons.Default.AutoGraph, // Using AutoGraph for Reflection/Insights
+        Icons.Default.AutoGraph,
         Icons.Default.Chat
     )
 
@@ -49,13 +64,10 @@ fun MainScreen(
     val currentRoute = navBackStackEntry?.destination?.route ?: "Stream"
 
     val showGlobalBars = currentRoute in topLevelRoutes || currentRoute == "Stream"
-
-    // CONTROL CENTER STATE
     var showControlCenter by remember { mutableStateOf(false) }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
-
         topBar = {
             if (showGlobalBars) {
                 TopAppBar(
@@ -71,14 +83,11 @@ fun MainScreen(
                         containerColor = MaterialTheme.colorScheme.background
                     ),
                     actions = {
-                        // 1. SEARCH
                         if (currentRoute == "Stream") {
                             IconButton(onClick = { navController.navigate("Recall") }) {
                                 Icon(Icons.Default.Search, contentDescription = "Search")
                             }
                         }
-
-                        // 2. INSPECTOR
                         IconButton(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -91,8 +100,6 @@ fun MainScreen(
                                 tint = if (isRunning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-
-                        // 3. QUICK PLAY
                         FilledIconButton(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -137,7 +144,6 @@ fun MainScreen(
             }
         }
     ) { innerPadding ->
-
         NavHost(
             navController = navController,
             startDestination = "Stream",
@@ -151,17 +157,24 @@ fun MainScreen(
                 )
             }
 
-            // NEW: REFLECTION SCREEN
             composable("Reflection") {
+                // Share HomeViewModel for memory data
                 ReflectionScreen(
-                    // Pass Activity-scoped HomeViewModel to share memory data
-                    homeViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
-                        viewModelStoreOwner = (navController.context as androidx.activity.ComponentActivity)
+                    homeViewModel = viewModel<HomeViewModel>(
+                        viewModelStoreOwner = context as Activity as ViewModelStoreOwner
                     )
                 )
             }
 
-            composable("Oracle") { OracleScreen() }
+            composable("Oracle") {
+                // Share HomeViewModel, Create new OracleViewModel
+                OracleScreen(
+                    homeViewModel = viewModel<HomeViewModel>(
+                        viewModelStoreOwner = context as Activity as ViewModelStoreOwner
+                    ),
+                    oracleViewModel = viewModel<OracleViewModel>()
+                )
+            }
 
             composable("Recall") {
                 RecallScreen(
@@ -169,13 +182,14 @@ fun MainScreen(
                     onMemoryClick = { id -> navController.navigate("MemoryDetail/$id") }
                 )
             }
+
             composable("MemoryDetail/{memoryId}") { backStackEntry ->
                 val id = backStackEntry.arguments?.getString("memoryId") ?: return@composable
                 MemoryDetailScreen(
                     memoryId = id,
                     onBack = { navController.popBackStack() },
-                    viewModel = androidx.lifecycle.viewmodel.compose.viewModel(
-                        viewModelStoreOwner = (navController.context as androidx.activity.ComponentActivity)
+                    viewModel = viewModel<HomeViewModel>(
+                        viewModelStoreOwner = context as Activity as ViewModelStoreOwner
                     )
                 )
             }

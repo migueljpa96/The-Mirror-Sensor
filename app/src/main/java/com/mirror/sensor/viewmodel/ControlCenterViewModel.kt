@@ -1,6 +1,7 @@
 package com.mirror.sensor.viewmodel
 
 import android.Manifest
+import android.app.AppOpsManager
 import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
@@ -8,7 +9,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.provider.Settings
+import android.os.Build
+import android.os.Process
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -16,15 +18,14 @@ import com.mirror.sensor.managers.RealTimeSensorManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlin.math.abs
-import kotlin.math.log10
 import kotlin.math.sqrt
 
 data class SystemHealth(
-    val micPermission: Boolean = false,
-    val locationPermission: Boolean = false,
-    val accessibilityEnabled: Boolean = false,
-    val notificationEnabled: Boolean = false
+    val notificationPermission: Boolean = false, // Transparency
+    val micPermission: Boolean = false,          // Session Audio
+    val usageStatsPermission: Boolean = false,   // Focus Tracking
+    val physicalPermission: Boolean = false,     // Biometric Sync
+    val locationPermission: Boolean = false      // Spatial Context
 )
 
 class ControlCenterViewModel(application: Application) : AndroidViewModel(application), SensorEventListener {
@@ -34,10 +35,7 @@ class ControlCenterViewModel(application: Application) : AndroidViewModel(applic
     private val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
     // 1. LIVE SENSOR DATA
-    // Audio (0..1 normalized)
     val audioLevel = RealTimeSensorManager.audioLevel
-
-    // Motion (G-Force deviation)
     private val _motionLevel = MutableStateFlow(0f)
     val motionLevel = _motionLevel.asStateFlow()
 
@@ -71,20 +69,32 @@ class ControlCenterViewModel(application: Application) : AndroidViewModel(applic
     }
 
     private fun checkPermissions() {
+        // 1. Transparency (Notifications)
+        val hasNotif = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        } else true
+
+        // 2. Audio
         val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+        // 3. Physical
+        val hasPhysical = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED
+        } else true
+
+        // 4. Location
         val hasLoc = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
-        val accessibilityEnabled = try {
-            val enabledServices = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-            enabledServices?.contains(context.packageName) == true
-        } catch (e: Exception) { false }
+        // 5. Focus (Usage Stats)
+        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
+        } else {
+            appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
+        }
+        val hasUsage = mode == AppOpsManager.MODE_ALLOWED
 
-        val notificationEnabled = try {
-            val enabledListeners = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
-            enabledListeners?.contains(context.packageName) == true
-        } catch (e: Exception) { false }
-
-        _health.value = SystemHealth(hasMic, hasLoc, accessibilityEnabled, notificationEnabled)
+        _health.value = SystemHealth(hasNotif, hasMic, hasUsage, hasPhysical, hasLoc)
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
@@ -102,14 +112,13 @@ class ControlCenterViewModel(application: Application) : AndroidViewModel(applic
             linear_acceleration[1] = event.values[1] - gravity[1]
             linear_acceleration[2] = event.values[2] - gravity[2]
 
-            // Magnitude of movement
+            // Magnitude
             val magnitude = sqrt(
                 linear_acceleration[0] * linear_acceleration[0] +
                         linear_acceleration[1] * linear_acceleration[1] +
                         linear_acceleration[2] * linear_acceleration[2]
             )
 
-            // Normalize for UI (0..1 approx)
             _motionLevel.value = (magnitude / 5f).coerceIn(0f, 1f)
         }
     }

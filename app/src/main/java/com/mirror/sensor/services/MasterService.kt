@@ -3,6 +3,8 @@ package com.mirror.sensor.services
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -16,14 +18,15 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
-import com.mirror.sensor.managers.RealTimeSensorManager // <--- IMPORT THIS
+import com.mirror.sensor.managers.RealTimeSensorManager
 import com.mirror.sensor.workers.DataUploadWorker
+import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import com.mirror.sensor.services.PhysicalService
 
 class MasterService : Service() {
 
@@ -31,24 +34,31 @@ class MasterService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var physicalManager: PhysicalService
 
+    // Usage Stats (Replaces ScreenService)
+    private var lastAppPackage: String = ""
+    private var tempUsageFile: File? = null
+
     // Timers
     private val handler = Handler(Looper.getMainLooper())
-
-    // --- NEW: Audio Polling ---
     private val audioPollHandler = Handler(Looper.getMainLooper())
+    private val usagePollHandler = Handler(Looper.getMainLooper())
+
     private val audioPollRunnable = object : Runnable {
         override fun run() {
             mediaRecorder?.let {
                 try {
-                    // Read Mic Volume
-                    val amp = it.maxAmplitude
-                    RealTimeSensorManager.updateAmplitude(amp)
-                } catch (e: Exception) {
-                    // Ignore transient errors
-                }
+                    RealTimeSensorManager.updateAmplitude(it.maxAmplitude)
+                } catch (e: Exception) {}
             }
-            // Repeat every 50ms (20 FPS)
             audioPollHandler.postDelayed(this, 50)
+        }
+    }
+
+    // POLL APP USAGE every 2 seconds
+    private val usagePollRunnable = object : Runnable {
+        override fun run() {
+            checkCurrentApp()
+            usagePollHandler.postDelayed(this, 2000)
         }
     }
 
@@ -60,6 +70,7 @@ class MasterService : Service() {
         super.onCreate()
         Log.i(TAG, "🟢 Service Created")
         physicalManager = PhysicalService(this)
+        tempUsageFile = File(getExternalFilesDir(null), "temp_usage.jsonl")
 
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "TheMirror:HolisticLock")
@@ -96,10 +107,11 @@ class MasterService : Service() {
                 start()
             }
 
-            // --- START POLLING ---
-            audioPollHandler.post(audioPollRunnable) // <--- Start the visualizer data
+            // Start Pollers
+            audioPollHandler.post(audioPollRunnable)
+            usagePollHandler.post(usagePollRunnable) // <--- USAGE POLLER
 
-            Log.d(TAG, "🎙️ Recording Started: $TEMP_FILENAME")
+            Log.d(TAG, "🎙️ Recording Started")
             handler.postDelayed({ rotateSession() }, RECORDING_INTERVAL_MS)
 
         } catch (e: IOException) {
@@ -108,16 +120,53 @@ class MasterService : Service() {
         }
     }
 
+    private fun checkCurrentApp() {
+        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val time = System.currentTimeMillis()
+        val events = usm.queryEvents(time - 5000, time)
+        val event = UsageEvents.Event()
+
+        var newPkg = ""
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                newPkg = event.packageName
+            }
+        }
+
+        if (newPkg.isNotEmpty() && newPkg != lastAppPackage) {
+            lastAppPackage = newPkg
+            logUsage(newPkg)
+        }
+    }
+
+    private fun logUsage(pkg: String) {
+        val entry = JSONObject()
+        entry.put("timestamp", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
+        entry.put("app_package", pkg)
+        entry.put("event", "FOREGROUND")
+
+        try {
+            FileOutputStream(tempUsageFile, true).use { it.write((entry.toString() + "\n").toByteArray()) }
+        } catch (e: Exception) {}
+    }
+
     private fun rotateSession() {
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         Log.i(TAG, "🔄 ROTATING SESSION: $timestamp")
-
         stopAndReleaseRecorder()
 
+        // Rotate Audio
         if (tempAudioFile?.exists() == true) {
-            val finalName = "AUDIO_$timestamp.m4a"
-            val finalFile = File(getExternalFilesDir(null), finalName)
-            if (tempAudioFile!!.renameTo(finalFile)) Log.d(TAG, "✅ Audio Sealed: $finalName")
+            val finalFile = File(getExternalFilesDir(null), "AUDIO_$timestamp.m4a")
+            tempAudioFile!!.renameTo(finalFile)
+        }
+
+        // Rotate Screen
+        if (tempUsageFile?.exists() == true && tempUsageFile!!.length() > 0) {
+            val finalFile = File(getExternalFilesDir(null), "USAGE_$timestamp.jsonl")
+            tempUsageFile!!.renameTo(finalFile)
+            tempUsageFile = File(getExternalFilesDir(null), "temp_screen.jsonl") // Reset
         }
 
         physicalManager.rotateLogFile(timestamp)
@@ -134,20 +183,12 @@ class MasterService : Service() {
     }
 
     private fun stopAndReleaseRecorder() {
-        // --- STOP POLLING ---
-        audioPollHandler.removeCallbacks(audioPollRunnable) // <--- Stop updates
-        RealTimeSensorManager.updateAmplitude(0) // Reset UI to 0
+        audioPollHandler.removeCallbacks(audioPollRunnable)
+        usagePollHandler.removeCallbacks(usagePollRunnable)
+        RealTimeSensorManager.updateAmplitude(0)
 
-        try {
-            mediaRecorder?.apply {
-                stop()
-                release()
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Recorder stop warning: ${e.message}")
-        } finally {
-            mediaRecorder = null
-        }
+        try { mediaRecorder?.stop(); mediaRecorder?.release() } catch (e: Exception) {}
+        mediaRecorder = null
     }
 
     private fun startForegroundServiceNotification() {
@@ -172,43 +213,27 @@ class MasterService : Service() {
     }
 
     override fun onDestroy() {
-        Log.w(TAG, "🛑 SERVICE DESTROYED")
-
-        // 1. Stop Active Components
         stopAndReleaseRecorder()
         physicalManager.stopTracking()
         handler.removeCallbacksAndMessages(null)
-        if (wakeLock?.isHeld == true) {
-            wakeLock?.release()
-        }
-
-        // 2. SAFE CLEANUP: Only delete TEMP files.
-        // Leave sealed "AUDIO_"/"SCREEN_" files for the DataUploadWorker to handle.
-        val filesDir = getExternalFilesDir(null)
-        val files = filesDir?.listFiles()
-
-        var deletedCount = 0
-        files?.forEach { file ->
-            val name = file.name
-
-            // ONLY target files starting with "temp_"
-            if (name.startsWith("temp_")) {
-                if (file.delete()) {
-                    deletedCount++
-                }
-            }
-        }
-
-        Log.d(TAG, "🧹 Cleanup Complete: Deleted $deletedCount temp files. Preserved finalized data.")
-
+        wakeLock?.release()
         super.onDestroy()
     }
 
-    override fun onBind(intent: Intent?): IBinder? {
-        return null
-    }
+    override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
         const val TAG = "TheMirrorService"
+        fun startService(context: Context) {
+            val intent = Intent(context, MasterService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+        fun stopService(context: Context) {
+            context.stopService(Intent(context, MasterService::class.java))
+        }
     }
 }

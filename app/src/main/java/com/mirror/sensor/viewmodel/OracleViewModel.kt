@@ -2,69 +2,86 @@ package com.mirror.sensor.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mirror.sensor.data.model.Memory
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import java.util.Date
 import java.util.UUID
 
-data class ChatMessage(
+// Data Models for the Stream
+data class OracleMessage(
     val id: String = UUID.randomUUID().toString(),
     val text: String,
     val isUser: Boolean,
-    val timestamp: Date = Date(),
-    val isThinking: Boolean = false
+    val timestamp: Long = System.currentTimeMillis(),
+    val relatedMemoryId: String? = null // The "Evidence"
 )
 
 class OracleViewModel : ViewModel() {
 
-    private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
-    val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
+    private val _messages = MutableStateFlow<List<OracleMessage>>(emptyList())
+    val messages = _messages.asStateFlow()
 
-    private val _isTyping = MutableStateFlow(false)
-    val isTyping: StateFlow<Boolean> = _isTyping.asStateFlow()
+    private val _isThinking = MutableStateFlow(false)
+    val isThinking = _isThinking.asStateFlow()
 
+    // Initial "Proactive" State
     init {
-        // Initial Greeting
-        _messages.value = listOf(
-            ChatMessage(
-                text = "I am The Mirror. I have been observing your day.\n\nAsk me anything about your timeline, stress levels, or activities.",
-                isUser = false
-            )
-        )
+        addSystemMessage("I'm active. I've analyzed 14 new memories today. What would you like to know?")
     }
 
-    fun sendMessage(text: String) {
+    fun sendMessage(text: String, allMemories: List<Memory>) {
         if (text.isBlank()) return
 
         // 1. Add User Message
-        val userMsg = ChatMessage(text = text, isUser = true)
+        val userMsg = OracleMessage(text = text, isUser = true)
         _messages.value = _messages.value + userMsg
 
-        // 2. Simulate AI Thinking
+        // 2. Simulate AI Processing
         viewModelScope.launch {
-            _isTyping.value = true
-            delay(1500) // Fake network delay
+            _isThinking.value = true
+            delay(1500) // Simulate network/processing latency
 
-            // 3. Mock Response (Placeholder for Cloud Function)
-            // Later, we will replace this with: val response = firebaseFunctions.call("askTheMirror", text)
-            val aiResponseText = generateMockResponse(text)
-
-            _isTyping.value = false
-            _messages.value = _messages.value + ChatMessage(text = aiResponseText, isUser = false)
+            // 3. Generate "Insight" (Mock Logic for Demo)
+            val response = generateMockResponse(text, allMemories)
+            _messages.value = _messages.value + response
+            _isThinking.value = false
         }
     }
 
-    private fun generateMockResponse(query: String): String {
+    private fun addSystemMessage(text: String) {
+        _messages.value = _messages.value + OracleMessage(text = text, isUser = false)
+    }
+
+    // This would be replaced by your LLM/Backend call
+    private fun generateMockResponse(query: String, memories: List<Memory>): OracleMessage {
+        val lowerQuery = query.lowercase()
+
+        // Dynamic mock responses based on keywords
         return when {
-            query.contains("stress", true) ->
-                "I noticed your stress levels peaked around 2:00 PM while you were using Slack. It seems work communications are a trigger today."
-            query.contains("focus", true) ->
-                "You have been in 'Deep Work' mode for 3 hours today. This is 20% higher than your average."
-            else ->
-                "I have recorded that in your timeline. Is there a specific pattern you would like me to analyze?"
+            lowerQuery.contains("stress") || lowerQuery.contains("anxious") -> {
+                // Find a stressful memory to attach as "Evidence"
+                val stressMemory = memories.find { it.psychological_profile.stress_level > 0.6 }
+                OracleMessage(
+                    text = "Your stress levels have been elevated in the afternoon. Specifically, the environment around 2:00 PM seems to be a trigger.",
+                    isUser = false,
+                    relatedMemoryId = stressMemory?.id
+                )
+            }
+            lowerQuery.contains("happy") || lowerQuery.contains("good") -> {
+                OracleMessage(
+                    text = "You seemed most content during your morning routine. The audio analysis detected calm consistent tones.",
+                    isUser = false,
+                    relatedMemoryId = memories.firstOrNull()?.id
+                )
+            }
+            else -> {
+                OracleMessage(
+                    text = "I'm analyzing that pattern. Based on your recent stream, this seems to be a recurring theme.",
+                    isUser = false
+                )
+            }
         }
     }
 }

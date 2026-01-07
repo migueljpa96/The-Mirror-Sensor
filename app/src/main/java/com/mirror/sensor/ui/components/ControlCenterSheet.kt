@@ -23,7 +23,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -45,14 +44,13 @@ fun ControlCenterSheet(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Lifecycle: Start sensors only when sheet is open
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) viewModel.startSensors()
             if (event == Lifecycle.Event.ON_PAUSE) viewModel.stopSensors()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        viewModel.startSensors() // Start immediately on open
+        viewModel.startSensors()
         onDispose {
             viewModel.stopSensors()
             lifecycleOwner.lifecycle.removeObserver(observer)
@@ -69,7 +67,7 @@ fun ControlCenterSheet(
             .padding(horizontal = 24.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Handle (Visual Grip)
+        // Handle
         Box(
             modifier = Modifier
                 .width(40.dp)
@@ -80,7 +78,7 @@ fun ControlCenterSheet(
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        // 1. STATUS ORB (The Hero)
+        // 1. STATUS ORB
         StatusOrb(
             isActive = isServiceRunning,
             onClick = onToggleService
@@ -99,7 +97,6 @@ fun ControlCenterSheet(
         Spacer(modifier = Modifier.height(48.dp))
 
         // 2. SENSOR STRIPS
-        // Audio
         SensorStrip(
             label = "AUDIO INPUT",
             isActive = health.micPermission,
@@ -108,10 +105,9 @@ fun ControlCenterSheet(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Motion
         SensorStrip(
             label = "INERTIAL SENSORS",
-            isActive = true,
+            isActive = health.physicalPermission,
             value = motionLevel,
             isMotion = true
         )
@@ -121,13 +117,17 @@ fun ControlCenterSheet(
         // 3. PERMISSION CHECKLIST
         PermissionList(health) { type ->
             when(type) {
-                "MIC", "LOC" -> {
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                    intent.data = android.net.Uri.fromParts("package", context.packageName, null)
+                "USAGE" -> {
+                    val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     context.startActivity(intent)
                 }
-                "ACC" -> context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                "NOTIF" -> context.startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
+                else -> {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    intent.data = android.net.Uri.fromParts("package", context.packageName, null)
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                }
             }
         }
 
@@ -135,6 +135,7 @@ fun ControlCenterSheet(
     }
 }
 
+// ... StatusOrb, SensorStrip, AudioVisualizerStrip, MotionVisualizer remain unchanged ...
 @Composable
 fun StatusOrb(isActive: Boolean, onClick: () -> Unit) {
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -161,7 +162,6 @@ fun StatusOrb(isActive: Boolean, onClick: () -> Unit) {
             .background(color.copy(alpha = 0.2f))
             .clickable { onClick() }
     ) {
-        // Core
         Box(
             modifier = Modifier
                 .size(60.dp)
@@ -192,7 +192,6 @@ fun SensorStrip(label: String, isActive: Boolean, value: Float, isMotion: Boolea
             modifier = Modifier.width(100.dp)
         )
 
-        // Visualizer
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -217,14 +216,12 @@ fun SensorStrip(label: String, isActive: Boolean, value: Float, isMotion: Boolea
 
 @Composable
 fun AudioVisualizerStrip(amplitude: Float) {
-    // Generate simplified waveform
     Canvas(modifier = Modifier.fillMaxSize()) {
         val barCount = 30
         val barWidth = size.width / barCount
         val centerY = size.height / 2
 
         for (i in 0 until barCount) {
-            // Simulated wave effect using noise and amplitude
             val randomHeight = (amplitude * size.height * 0.8f * Random.nextFloat()).coerceAtLeast(2f)
             val x = i * barWidth
 
@@ -249,7 +246,6 @@ fun MotionVisualizer(intensity: Float) {
 
     Canvas(modifier = Modifier.fillMaxSize()) {
         val centerY = size.height / 2
-        // Line that vibrates
         drawLine(
             color = Color(0xFF2979FF).copy(alpha = 0.8f),
             start = Offset(0f, centerY + (if (intensity > 0.1f) offsetX * intensity * 10 else 0f)),
@@ -262,26 +258,62 @@ fun MotionVisualizer(intensity: Float) {
 
 @Composable
 fun PermissionList(health: com.mirror.sensor.viewmodel.SystemHealth, onFix: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        PermissionItem("Microphone Access", health.micPermission) { onFix("MIC") }
-        PermissionItem("Location Services", health.locationPermission) { onFix("LOC") }
-        PermissionItem("App Accessibility", health.accessibilityEnabled) { onFix("ACC") }
-        PermissionItem("Notification Listener", health.notificationEnabled) { onFix("NOTIF") }
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        PermissionItem(
+            label = "Status Notifications",
+            status = if (health.notificationPermission) "Active: Alerts enabled" else "Tap to enable notifications",
+            isOk = health.notificationPermission
+        ) { onFix("NOTIF") }
+
+        PermissionItem(
+            label = "Microphone",
+            status = if (health.micPermission) "Active: Recording enabled" else "Tap to grant access",
+            isOk = health.micPermission
+        ) { onFix("MIC") }
+
+        PermissionItem(
+            label = "App Usage",
+            status = if (health.usageStatsPermission) "Active: Tracking enabled" else "Tap to enable usage stats",
+            isOk = health.usageStatsPermission
+        ) { onFix("USAGE") }
+
+        PermissionItem(
+            label = "Motion Sensors",
+            status = if (health.physicalPermission) "Active: Sensors linked" else "Tap to sync sensors",
+            isOk = health.physicalPermission
+        ) { onFix("BIO") }
+
+        PermissionItem(
+            label = "Location",
+            status = if (health.locationPermission) "Active: GPS enabled" else "Tap to grant access",
+            isOk = health.locationPermission
+        ) { onFix("LOC") }
     }
 }
 
 @Composable
-fun PermissionItem(label: String, isOk: Boolean, onClick: () -> Unit) {
+fun PermissionItem(label: String, status: String, isOk: Boolean, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable { if (!isOk) onClick() },
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { if (!isOk) onClick() },
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (isOk) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = if (isOk) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+            )
+            Text(
+                text = status,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (isOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                fontSize = 11.sp
+            )
+        }
 
         Icon(
             imageVector = if (isOk) Icons.Default.Check else Icons.Default.Close,

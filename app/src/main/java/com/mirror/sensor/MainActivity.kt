@@ -9,11 +9,9 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.core.content.ContextCompat
-import com.mirror.sensor.services.ScreenService
 import com.mirror.sensor.ui.screens.MainScreen
 import com.mirror.sensor.viewmodel.MainViewModel
 
@@ -23,11 +21,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
+                // Manually scoped to Activity to survive Navigation
                 val mainViewModel: androidx.lifecycle.ViewModel = androidx.lifecycle.viewmodel.compose.viewModel<MainViewModel>()
 
                 Surface {
                     MainScreen(
-                        // Strict Gatekeeper Logic
                         onToggleService = { isRunning ->
                             if (isRunning) {
                                 (mainViewModel as MainViewModel).stopService()
@@ -43,7 +41,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkAllPermissionsAndStart(viewModel: MainViewModel) {
-        // 1. Runtime Permissions (Mic, Location)
+        // 1. Runtime Permissions (Mic, Location, Physical)
         val permissions = mutableListOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.ACCESS_FINE_LOCATION,
@@ -56,47 +54,28 @@ class MainActivity : ComponentActivity() {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        val allRuntimeGranted = permissions.all {
+        val allGranted = permissions.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
 
-        if (!allRuntimeGranted) {
-            requestPermissionsLauncher.launch(permissions.toTypedArray())
+        if (!allGranted) {
+            Toast.makeText(this, "Permissions missing. Re-run onboarding.", Toast.LENGTH_LONG).show()
+            // In a real app, you might want to reset onboarding flag or show dialog
             return
         }
 
-        // 2. Accessibility Service Check
-        if (!isAccessibilityEnabled()) {
-            Toast.makeText(this, "The Mirror needs Accessibility to see usage", Toast.LENGTH_LONG).show()
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            return
-        }
-
-        // 3. Notification Listener Check
-        if (!isNotificationListenerEnabled()) {
-            Toast.makeText(this, "The Mirror needs access to Notifications", Toast.LENGTH_LONG).show()
+        // 2. Notification Listener Check (Optional, but kept for NotificationService)
+        // If user didn't enable it, we just warn or skip
+        /* if (!isNotificationListenerEnabled()) {
+            Toast.makeText(this, "Notification access for digital context is missing", Toast.LENGTH_SHORT).show()
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             return
         }
+        */
 
         // ALL GREEN -> START ENGINE
         viewModel.startService()
         Toast.makeText(this, "The Mirror is Active", Toast.LENGTH_SHORT).show()
-    }
-
-    private val requestPermissionsLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-            val micGranted = permissions[Manifest.permission.RECORD_AUDIO] ?: false
-            if (!micGranted) {
-                Toast.makeText(this, "Microphone is critical!", Toast.LENGTH_LONG).show()
-            }
-            // User can try clicking Start again to proceed
-        }
-
-    private fun isAccessibilityEnabled(): Boolean {
-        val service = "${packageName}/${ScreenService::class.java.canonicalName}"
-        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-        return enabled?.contains(service) == true
     }
 
     private fun isNotificationListenerEnabled(): Boolean {
