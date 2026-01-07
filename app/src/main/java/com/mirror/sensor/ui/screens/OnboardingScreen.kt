@@ -254,8 +254,7 @@ fun SensorGrantStep(viewModel: OnboardingViewModel) {
     }
 }
 
-// ... Reuse TransparencyStep, DrillStep, SwipeToSign, PromiseItem, SensorCable ...
-
+// --- STEP 1: THE COVENANT (Refined) ---
 @Composable
 fun TransparencyStep(viewModel: OnboardingViewModel) {
     Column(
@@ -267,18 +266,59 @@ fun TransparencyStep(viewModel: OnboardingViewModel) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Spacer(modifier = Modifier.height(48.dp))
+
+            // Icon: Use Eye or AutoGraph to symbolize "Seeing"
+            Icon(
+                imageVector = Icons.Default.Visibility,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(64.dp)
+            )
+
             Spacer(modifier = Modifier.height(32.dp))
-            Icon(Icons.Default.Security, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(56.dp))
+
+            Text(
+                "Meet Your\nDigital Subconscious.",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                lineHeight = 40.sp
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                "The Mirror observes your reality to reveal the patterns you miss. It is a tool for clarity, designed to help you see yourself.",
+                style = MaterialTheme.typography.bodyLarge,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(48.dp))
+
+            // The 3 Pillars
+            PromiseItem(
+                Icons.Default.PlayArrow, // Start
+                "Intentional Observation",
+                "The Mirror only opens its eyes when you command it. No background surveillance."
+            )
             Spacer(modifier = Modifier.height(24.dp))
-            Text("Wisdom, Not Wiretaps.", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-            Spacer(modifier = Modifier.height(32.dp))
-            PromiseItem(Icons.Default.VisibilityOff, "On Demand Only", "I only observe when you tap Start. Never in the background.")
-            Spacer(modifier = Modifier.height(20.dp))
-            PromiseItem(Icons.Default.DataUsage, "The 7-Day Rule", "Raw audio/logs are deleted after 7 days. Only insights remain.")
-            Spacer(modifier = Modifier.height(20.dp))
-            PromiseItem(Icons.Default.Lock, "Your Vault", "Data is encrypted and processed in a private cloud container. Never sold.")
+            PromiseItem(
+                Icons.Default.HourglassEmpty, // Ephemeral
+                "Ephemeral Memory",
+                "Raw data dissolves after 7 days. Only the insights—the wisdom—remain."
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            PromiseItem(
+                Icons.Default.Lock, // Security
+                "Private Vault",
+                "Your reality is encrypted in a private vault. You hold the only key."
+            )
         }
+
         Spacer(modifier = Modifier.height(48.dp))
+
         SwipeToSign(onSign = { viewModel.completeTransparency() })
     }
 }
