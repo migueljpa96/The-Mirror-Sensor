@@ -31,7 +31,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
@@ -40,6 +39,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+// FIXED IMPORT:
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mirror.sensor.ui.components.LiveMemoryCard
 import com.mirror.sensor.viewmodel.OnboardingStep
@@ -55,6 +56,8 @@ fun Context.findActivity(): Activity? = when (this) {
 @Composable
 fun OnboardingScreen(onComplete: () -> Unit, viewModel: OnboardingViewModel = viewModel()) {
     val step by viewModel.currentStep.collectAsState()
+
+    // No change needed here, just the import above
     val lifecycleOwner = LocalLifecycleOwner.current
 
     DisposableEffect(lifecycleOwner) {
@@ -77,6 +80,7 @@ fun OnboardingScreen(onComplete: () -> Unit, viewModel: OnboardingViewModel = vi
     }
 }
 
+// ... (Rest of file remains unchanged: SensorGrantStep, TransparencyStep, DrillStep, etc.)
 @Composable
 fun SensorGrantStep(viewModel: OnboardingViewModel) {
     val sensorState by viewModel.sensorState.collectAsState()
@@ -127,8 +131,6 @@ fun SensorGrantStep(viewModel: OnboardingViewModel) {
             handlePermissionClick(Manifest.permission.ACCESS_FINE_LOCATION, sensorState.hasLocation, locationLauncher)
         }
 
-        // Removed Focus Tracking (Usage Stats) cable
-
         Spacer(modifier = Modifier.weight(1f))
         Spacer(modifier = Modifier.height(32.dp))
 
@@ -138,7 +140,6 @@ fun SensorGrantStep(viewModel: OnboardingViewModel) {
     }
 }
 
-// ... TransparencyStep, DrillStep, SwipeToSign, PromiseItem, SensorCable remain same ...
 @Composable
 fun TransparencyStep(viewModel: OnboardingViewModel) {
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.SpaceBetween, horizontalAlignment = Alignment.CenterHorizontally) {

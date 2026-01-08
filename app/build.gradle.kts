@@ -61,16 +61,19 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore")
     implementation("com.google.firebase:firebase-functions")
 
-    // WORK MANAGER
-    implementation("androidx.work:work-runtime-ktx:2.11.0")
-
     // COMPOSE & UI
     implementation(platform("androidx.compose:compose-bom:2025.12.01"))
+    implementation("androidx.activity:activity-compose:1.12.2") // <--- ADDED: Critical for setContent
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0") // <--- ADDED: Critical for viewModel()
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
+
+    // Icons: Ensure we have the full set for AutoMirrored
     implementation("androidx.compose.material:material-icons-extended")
+
     implementation("androidx.navigation:navigation-compose:2.9.6")
 
     // DEBUGGING
@@ -82,6 +85,6 @@ dependencies {
     implementation("androidx.room:room-ktx:$room_version")
     kapt("androidx.room:room-compiler:$room_version")
 
-    // WORK MANAGER
-    implementation("androidx.work:work-runtime-ktx:2.9.0")
+    // WORK MANAGER (FIXED: Removed duplicate, kept only latest)
+    implementation("androidx.work:work-runtime-ktx:2.11.0")
 }

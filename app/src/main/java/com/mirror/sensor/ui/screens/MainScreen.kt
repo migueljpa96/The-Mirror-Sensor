@@ -1,11 +1,13 @@
 package com.mirror.sensor.ui.screens
 
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.AutoGraph
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -30,118 +32,117 @@ import com.mirror.sensor.viewmodel.HomeViewModel
 import com.mirror.sensor.viewmodel.MainViewModel
 import com.mirror.sensor.viewmodel.OracleViewModel
 
+// Helper for safe Activity lookup
+fun Context.findComponentActivity(): ComponentActivity? = when (this) {
+    is ComponentActivity -> this
+    is ContextWrapper -> baseContext.findComponentActivity()
+    else -> null
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
     onToggleService: (Boolean) -> Unit,
     viewModel: MainViewModel = viewModel()
 ) {
-    // 1. CHECK ONBOARDING STATUS
+    // 1. ONBOARDING GATE
     val hasCompletedOnboarding by viewModel.hasCompletedOnboarding.collectAsState()
 
     if (!hasCompletedOnboarding) {
-        OnboardingScreen(
-            onComplete = { viewModel.setOnboardingComplete() }
-        )
+        OnboardingScreen(onComplete = { viewModel.setOnboardingComplete() })
         return
     }
 
-    // 2. THE MAIN APP
+    // 2. MAIN UI
     val navController = rememberNavController()
     val isRunning by viewModel.isServiceRunning.collectAsState()
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
 
-    // FIX: Explicitly cast context to ComponentActivity for ViewModelStoreOwner
-    val activityOwner = context as ComponentActivity
+    // Safe Activity Lookup for shared ViewModel scope
+    val activityOwner = context.findComponentActivity()
+        ?: throw IllegalStateException("MainScreen must be hosted in a ComponentActivity")
 
     val topLevelRoutes = listOf("Stream", "Reflection", "Oracle")
     val icons = listOf(
         Icons.Default.ViewStream,
         Icons.Default.AutoGraph,
-        Icons.Default.Chat
+        Icons.AutoMirrored.Filled.Chat // FIXED: Use AutoMirrored version
     )
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: "Stream"
-
-    val showGlobalBars = currentRoute in topLevelRoutes || currentRoute == "Stream"
     var showControlCenter by remember { mutableStateOf(false) }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
-            if (showGlobalBars) {
-                TopAppBar(
-                    title = {
-                        Text(
-                            currentRoute.uppercase(),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 2.sp
-                        )
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background
-                    ),
-                    actions = {
-                        if (currentRoute == "Stream") {
-                            IconButton(onClick = { navController.navigate("Recall") }) {
-                                Icon(Icons.Default.Search, contentDescription = "Search")
-                            }
-                        }
-                        IconButton(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                showControlCenter = true
-                            }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.GraphicEq,
-                                contentDescription = "Sensor Status",
-                                tint = if (isRunning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        FilledIconButton(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onToggleService(isRunning)
-                            },
-                            colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = if (isRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                                contentColor = if (isRunning) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary
-                            ),
-                            modifier = Modifier.padding(end = 8.dp, start = 4.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
-                                contentDescription = "Toggle Recording"
-                            )
+            TopAppBar(
+                title = {
+                    Text(
+                        currentRoute.uppercase(),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 2.sp
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
+                ),
+                actions = {
+                    if (currentRoute == "Stream") {
+                        IconButton(onClick = { navController.navigate("Recall") }) {
+                            Icon(Icons.Default.Search, contentDescription = "Search")
                         }
                     }
-                )
-            }
+                    IconButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            showControlCenter = true
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.GraphicEq,
+                            contentDescription = "Sensor Status",
+                            tint = if (isRunning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    FilledIconButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onToggleService(isRunning)
+                        },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = if (isRunning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                            contentColor = if (isRunning) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary
+                        )
+                    ) {
+                        Icon(
+                            imageVector = if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
+                            contentDescription = "Toggle Recording"
+                        )
+                    }
+                }
+            )
         },
         bottomBar = {
-            if (showGlobalBars) {
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 8.dp
-                ) {
-                    topLevelRoutes.forEachIndexed { index, screen ->
-                        NavigationBarItem(
-                            icon = { Icon(icons[index], contentDescription = screen) },
-                            label = { Text(screen, style = MaterialTheme.typography.labelSmall) },
-                            selected = currentRoute == screen,
-                            onClick = {
-                                navController.navigate(screen) {
-                                    popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surface,
+                tonalElevation = 8.dp
+            ) {
+                topLevelRoutes.forEachIndexed { index, screen ->
+                    NavigationBarItem(
+                        icon = { Icon(icons[index], contentDescription = screen) },
+                        label = { Text(screen, style = MaterialTheme.typography.labelSmall) },
+                        selected = currentRoute == screen,
+                        onClick = {
+                            navController.navigate(screen) {
+                                popUpTo(navController.graph.startDestinationId) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
                             }
-                        )
-                    }
+                        }
+                    )
                 }
             }
         }
@@ -153,24 +154,23 @@ fun MainScreen(
         ) {
             composable("Stream") {
                 HomeScreen(
+                    viewModel = viewModel(viewModelStoreOwner = activityOwner),
                     isServiceRunning = isRunning,
                     onOpenControlCenter = { showControlCenter = true },
-                    onMemoryClick = { memoryId -> navController.navigate("MemoryDetail/$memoryId") }
+                    onMemoryClick = { id -> navController.navigate("MemoryDetail/$id") }
                 )
             }
 
             composable("Reflection") {
-                // FIX: Use activityOwner here
                 ReflectionScreen(
-                    homeViewModel = viewModel<HomeViewModel>(viewModelStoreOwner = activityOwner)
+                    homeViewModel = viewModel(viewModelStoreOwner = activityOwner)
                 )
             }
 
             composable("Oracle") {
-                // FIX: Use activityOwner here
                 OracleScreen(
-                    homeViewModel = viewModel<HomeViewModel>(viewModelStoreOwner = activityOwner),
-                    oracleViewModel = viewModel<OracleViewModel>()
+                    homeViewModel = viewModel(viewModelStoreOwner = activityOwner),
+                    oracleViewModel = viewModel()
                 )
             }
 
@@ -183,11 +183,10 @@ fun MainScreen(
 
             composable("MemoryDetail/{memoryId}") { backStackEntry ->
                 val id = backStackEntry.arguments?.getString("memoryId") ?: return@composable
-                // FIX: Use activityOwner here
                 MemoryDetailScreen(
                     memoryId = id,
                     onBack = { navController.popBackStack() },
-                    viewModel = viewModel<HomeViewModel>(viewModelStoreOwner = activityOwner)
+                    viewModel = viewModel(viewModelStoreOwner = activityOwner)
                 )
             }
         }
