@@ -3,7 +3,6 @@ package com.mirror.sensor.viewmodel
 import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
-import com.mirror.sensor.services.MasterService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import androidx.core.content.edit
