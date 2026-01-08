@@ -47,7 +47,6 @@ import com.mirror.sensor.viewmodel.OnboardingStep
 import com.mirror.sensor.viewmodel.OnboardingViewModel
 import kotlin.math.roundToInt
 
-// Helper to safely find Activity from Compose context
 fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
@@ -55,18 +54,12 @@ fun Context.findActivity(): Activity? = when (this) {
 }
 
 @Composable
-fun OnboardingScreen(
-    onComplete: () -> Unit,
-    viewModel: OnboardingViewModel = viewModel()
-) {
+fun OnboardingScreen(onComplete: () -> Unit, viewModel: OnboardingViewModel = viewModel()) {
     val step by viewModel.currentStep.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Resume check to handle return from Settings
     DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) viewModel.checkSensors()
-        }
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) viewModel.checkSensors() }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
@@ -74,17 +67,8 @@ fun OnboardingScreen(
     val drillComplete by viewModel.drillComplete.collectAsState()
     LaunchedEffect(drillComplete) { if (drillComplete) onComplete() }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .systemBarsPadding()
-    ) {
-        AnimatedContent(
-            targetState = step,
-            transitionSpec = { fadeIn(tween(600)) togetherWith fadeOut(tween(600)) },
-            label = "Onboarding"
-        ) { currentStep ->
+    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).systemBarsPadding()) {
+        AnimatedContent(targetState = step, transitionSpec = { fadeIn(tween(600)) togetherWith fadeOut(tween(600)) }, label = "Onboarding") { currentStep ->
             when (currentStep) {
                 OnboardingStep.TRANSPARENCY -> TransparencyStep(viewModel)
                 OnboardingStep.SENSORS -> SensorGrantStep(viewModel)
@@ -94,231 +78,87 @@ fun OnboardingScreen(
     }
 }
 
-// --- STEP 2: SENSOR ACCESS ---
 @Composable
 fun SensorGrantStep(viewModel: OnboardingViewModel) {
     val sensorState by viewModel.sensorState.collectAsState()
     val context = LocalContext.current
     val activity = context.findActivity()
 
-    // --- UNIVERSAL PERMISSION LOGIC ---
-    fun handlePermissionClick(
-        permission: String,
-        isGranted: Boolean,
-        launcher: androidx.activity.result.ActivityResultLauncher<String>
-    ) {
-        // CASE 1: ALREADY GRANTED -> DO NOTHING (User stays in app)
-        if (isGranted) {
-            return
-        }
-
-        // CASE 2: NOT GRANTED
+    fun handlePermissionClick(permission: String, isGranted: Boolean, launcher: androidx.activity.result.ActivityResultLauncher<String>) {
+        if (isGranted) return
         if (activity != null) {
             val shouldShowRationale = ActivityCompat.shouldShowRequestPermissionRationale(activity, permission)
             val hasAskedBefore = viewModel.hasAskedPermission(permission)
-
             if (shouldShowRationale) {
-                // Denied once (Transient). System allows asking again.
                 launcher.launch(permission)
                 viewModel.markPermissionRequested(permission)
             } else {
-                if (hasAskedBefore) {
-                    // PERMANENT DENIAL: We asked before, and rationale is false.
-                    // We must guide them to Settings to fix it.
-                    viewModel.openAppSettings(context)
-                } else {
-                    // FIRST RUN: We haven't asked yet.
+                if (hasAskedBefore) viewModel.openAppSettings(context)
+                else {
                     launcher.launch(permission)
                     viewModel.markPermissionRequested(permission)
                 }
             }
-        } else {
-            // Fallback
-            launcher.launch(permission)
-        }
+        } else launcher.launch(permission)
     }
 
-    // Launchers
-    val notifLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { viewModel.checkSensors() }
-    )
-    val micLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { viewModel.checkSensors() }
-    )
-    val locationLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { viewModel.checkSensors() }
-    )
-    val physicalLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { viewModel.checkSensors() }
-    )
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { viewModel.checkSensors() }
+    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { viewModel.checkSensors() }
+    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { viewModel.checkSensors() }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp)
-            .verticalScroll(rememberScrollState()) // Ensure scroll on small screens
-    ) {
-        IconButton(
-            onClick = { viewModel.navigateBack() },
-            modifier = Modifier.offset(x = (-12).dp)
-        ) {
+    Column(modifier = Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState())) {
+        IconButton(onClick = { viewModel.navigateBack() }, modifier = Modifier.offset(x = (-12).dp)) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
         }
-
         Spacer(modifier = Modifier.height(16.dp))
         Text("Access Tokens", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text("Grant capability tokens for this session.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        // 1. Transparency Token
-        SensorCable(
-            "Transparency",
-            if (sensorState.hasNotifications) "Active: Transparency enabled." else "Required to show active status.",
-            Icons.Default.Notifications,
-            sensorState.hasNotifications
-        ) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                handlePermissionClick(Manifest.permission.POST_NOTIFICATIONS, sensorState.hasNotifications, notifLauncher)
-            }
+        SensorCable("Transparency", if (sensorState.hasNotifications) "Active: Transparency enabled." else "Required to show active status.", Icons.Default.Notifications, sensorState.hasNotifications) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) handlePermissionClick(Manifest.permission.POST_NOTIFICATIONS, sensorState.hasNotifications, notifLauncher)
         }
-
         Spacer(modifier = Modifier.height(16.dp))
-
-        // 2. Audio Token
-        SensorCable(
-            "Session Audio",
-            if (sensorState.hasMic) "Active: Microphone ready." else "Tap to grant microphone access.",
-            Icons.Default.Mic,
-            sensorState.hasMic
-        ) {
+        SensorCable("Session Audio", if (sensorState.hasMic) "Active: Microphone ready." else "Tap to grant microphone access.", Icons.Default.Mic, sensorState.hasMic) {
             handlePermissionClick(Manifest.permission.RECORD_AUDIO, sensorState.hasMic, micLauncher)
         }
-
         Spacer(modifier = Modifier.height(16.dp))
-
-        // 3. Spatial Context (Location) - NEW
-        SensorCable(
-            "Spatial Context",
-            if (sensorState.hasLocation) "Active: Location logging enabled." else "Tap to grant location access.",
-            Icons.Default.LocationOn,
-            sensorState.hasLocation
-        ) {
+        SensorCable("Spatial Context", if (sensorState.hasLocation) "Active: Location logging enabled." else "Tap to grant location access.", Icons.Default.LocationOn, sensorState.hasLocation) {
             handlePermissionClick(Manifest.permission.ACCESS_FINE_LOCATION, sensorState.hasLocation, locationLauncher)
         }
-
         Spacer(modifier = Modifier.height(16.dp))
-
-        // 4. Focus Token (Usage Stats)
-        SensorCable(
-            "Focus Tracking",
-            if (sensorState.hasUsage) "Active: App usage visible." else "Tap to find 'The Mirror' and enable.",
-            Icons.Default.DataUsage,
-            sensorState.hasUsage
-        ) {
-            // Only open settings if NOT enabled.
-            if (!sensorState.hasUsage) {
-                viewModel.openUsageSettings(context)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 5. Biometric Token
-        SensorCable(
-            "Biometric Sync",
-            if (sensorState.hasPhysical) "Active: Motion sensors linked." else "Tap to sync physical activity.",
-            Icons.Default.DirectionsWalk,
-            sensorState.hasPhysical
-        ) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                handlePermissionClick(Manifest.permission.ACTIVITY_RECOGNITION, sensorState.hasPhysical, physicalLauncher)
-            }
+        SensorCable("Focus Tracking", if (sensorState.hasUsage) "Active: App usage visible." else "Tap to find 'The Mirror' and enable.", Icons.Default.DataUsage, sensorState.hasUsage) {
+            if (!sensorState.hasUsage) viewModel.openUsageSettings(context)
         }
 
         Spacer(modifier = Modifier.weight(1f))
         Spacer(modifier = Modifier.height(32.dp))
 
-        Button(
-            onClick = { viewModel.moveToDrill() },
-            enabled = viewModel.areAllSensorsGranted(),
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-            shape = RoundedCornerShape(16.dp)
-        ) {
+        Button(onClick = { viewModel.moveToDrill() }, enabled = viewModel.areAllSensorsGranted(), modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(16.dp)) {
             Text("Initialize First Session")
         }
     }
 }
 
-// --- STEP 1: THE COVENANT (Refined) ---
+// ... Reuse TransparencyStep, DrillStep, SwipeToSign, PromiseItem, SensorCable from previous code ...
+// (I will assume you have these composables or can copy them from previous files as they are unchanged)
 @Composable
 fun TransparencyStep(viewModel: OnboardingViewModel) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.SpaceBetween,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.SpaceBetween, horizontalAlignment = Alignment.CenterHorizontally) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Spacer(modifier = Modifier.height(48.dp))
-
-            // Icon: Use Eye or AutoGraph to symbolize "Seeing"
-            Icon(
-                imageVector = Icons.Default.Visibility,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(64.dp)
-            )
-
             Spacer(modifier = Modifier.height(32.dp))
-
-            Text(
-                "Meet Your\nDigital Subconscious.",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                lineHeight = 40.sp
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text(
-                "The Mirror observes your reality to reveal the patterns you miss. It is a tool for clarity, designed to help you see yourself.",
-                style = MaterialTheme.typography.bodyLarge,
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Spacer(modifier = Modifier.height(48.dp))
-
-            // The 3 Pillars
-            PromiseItem(
-                Icons.Default.PlayArrow, // Start
-                "Intentional Observation",
-                "The Mirror only opens its eyes when you command it. No background surveillance."
-            )
+            Icon(Icons.Default.Security, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(56.dp))
             Spacer(modifier = Modifier.height(24.dp))
-            PromiseItem(
-                Icons.Default.HourglassEmpty, // Ephemeral
-                "Ephemeral Memory",
-                "Raw data dissolves after 7 days. Only the insights—the wisdom—remain."
-            )
-            Spacer(modifier = Modifier.height(24.dp))
-            PromiseItem(
-                Icons.Default.Lock, // Security
-                "Private Vault",
-                "Your reality is encrypted in a private vault. You hold the only key."
-            )
+            Text("Wisdom, Not Wiretaps.", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            Spacer(modifier = Modifier.height(32.dp))
+            PromiseItem(Icons.Default.VisibilityOff, "On Demand Only", "I only observe when you tap Start. Never in the background.")
+            Spacer(modifier = Modifier.height(20.dp))
+            PromiseItem(Icons.Default.DataUsage, "The 7-Day Rule", "Raw audio/logs are deleted after 7 days. Only insights remain.")
+            Spacer(modifier = Modifier.height(20.dp))
+            PromiseItem(Icons.Default.Lock, "Your Vault", "Data is encrypted and processed in a private cloud container. Never sold.")
         }
-
         Spacer(modifier = Modifier.height(48.dp))
-
         SwipeToSign(onSign = { viewModel.completeTransparency() })
     }
 }
@@ -351,16 +191,7 @@ fun SensorCable(label: String, desc: String, icon: ImageVector, isConnected: Boo
     val borderColor = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
     val iconColor = if (isConnected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.outline
     val iconBg = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, borderColor, RoundedCornerShape(16.dp))
-            .clip(RoundedCornerShape(16.dp))
-            .clickable { onClick() }
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+    Row(modifier = Modifier.fillMaxWidth().border(1.dp, borderColor, RoundedCornerShape(16.dp)).clip(RoundedCornerShape(16.dp)).clickable { onClick() }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(modifier = Modifier.size(40.dp).background(iconBg, CircleShape), contentAlignment = Alignment.Center) {
             Icon(icon, null, tint = iconColor, modifier = Modifier.size(20.dp))
         }
@@ -369,9 +200,7 @@ fun SensorCable(label: String, desc: String, icon: ImageVector, isConnected: Boo
             Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
             Text(desc, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (isConnected) {
-            Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
-        }
+        if (isConnected) Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -398,13 +227,11 @@ fun SwipeToSign(onSign: () -> Unit) {
     val thumbSizePx = with(density) { thumbSize.toPx() }
     val paddingPx = with(density) { padding.toPx() }
     val maxOffset = totalWidthPx - thumbSizePx - (paddingPx * 2)
-
     var offsetX by remember { mutableFloatStateOf(0f) }
     var isSigned by remember { mutableStateOf(false) }
-
     Box(modifier = Modifier.width(width).height(height).clip(RoundedCornerShape(100)).background(MaterialTheme.colorScheme.surfaceVariant).border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(100)), contentAlignment = Alignment.CenterStart) {
         Text("Slide to Accept Protocol", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.outline)
-        Box(modifier = Modifier.offset { IntOffset(offsetX.roundToInt(), 0) }.padding(padding).size(thumbSize).clip(CircleShape).background(if (isSigned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer).draggable(orientation = Orientation.Horizontal, state = rememberDraggableState { delta -> if (!isSigned) { offsetX = (offsetX + delta).coerceIn(0f, maxOffset) } }, onDragStopped = { if (offsetX >= maxOffset * 0.9f) { offsetX = maxOffset; isSigned = true; onSign() } else { offsetX = 0f } }), contentAlignment = Alignment.Center) {
+        Box(modifier = Modifier.offset { IntOffset(offsetX.roundToInt(), 0) }.padding(padding).size(thumbSize).clip(CircleShape).background(if (isSigned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer).draggable(orientation = Orientation.Horizontal, state = rememberDraggableState { delta -> if (!isSigned) offsetX = (offsetX + delta).coerceIn(0f, maxOffset) }, onDragStopped = { if (offsetX >= maxOffset * 0.9f) { offsetX = maxOffset; isSigned = true; onSign() } else offsetX = 0f }), contentAlignment = Alignment.Center) {
             Icon(imageVector = if (isSigned) Icons.Default.Check else Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = if (isSigned) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onPrimaryContainer)
         }
     }

@@ -13,94 +13,97 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * Handles "Digital Context" (App Usage/Focus).
- * Refactored to use "SCREEN" naming convention to match DataUploadWorker.
- */
 class ScreenService(private val context: Context) {
 
     private var tempFile: File? = null
-    private var lastAppPackage: String = ""
-
     private val handler = Handler(Looper.getMainLooper())
     private var isRunning = false
 
-    // Poll every 2 seconds
+    // Session State
+    private var currentPackage = "NONE"
+    private var sessionStartTime = 0L
+
     private val pollRunnable = object : Runnable {
         override fun run() {
             if (!isRunning) return
-            checkCurrentApp()
+            checkAppSwitch()
             handler.postDelayed(this, 2000)
         }
     }
 
     fun startTracking() {
-        Log.d(TAG, "⚡ Screen Tracking Started")
+        Log.d(TAG, "⚡ Screen Session-Tracker Started")
         isRunning = true
-        // RESTORED: Naming convention matches DataUploadWorker expectations
         tempFile = File(context.getExternalFilesDir(null), "temp_screen.jsonl")
+
+        currentPackage = "NONE"
+        sessionStartTime = System.currentTimeMillis()
 
         handler.post(pollRunnable)
     }
 
     fun stopTracking() {
+        // Close final session
+        logSession(currentPackage, sessionStartTime, System.currentTimeMillis())
         isRunning = false
         handler.removeCallbacks(pollRunnable)
-        Log.d(TAG, "🛑 Screen Tracking Stopped")
     }
 
-    // Called by MasterService during rotation
-    fun rotateLogFile(masterTimestamp: String) {
-        if (tempFile == null || !tempFile!!.exists() || tempFile!!.length() == 0L) return
-
-        // RESTORED: Prefix "SCREEN_" ensures worker routes to 'screen_logs' folder
-        val finalName = "SCREEN_$masterTimestamp.jsonl"
-        val finalFile = File(context.getExternalFilesDir(null), finalName)
-
-        if (tempFile!!.renameTo(finalFile)) {
-            Log.d(TAG, "✅ Screen Log Sealed: $finalName")
-            tempFile = File(context.getExternalFilesDir(null), "temp_screen.jsonl")
-        }
-    }
-
-    // Called by MasterService.onDestroy
-    fun cleanup() {
-        stopTracking()
-        if (tempFile?.exists() == true) {
-            val deleted = tempFile?.delete() ?: false
-            Log.d(TAG, "🧹 Temp Screen File Deleted: $deleted")
-        }
-    }
-
-    private fun checkCurrentApp() {
+    private fun checkAppSwitch() {
         val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val time = System.currentTimeMillis()
-        val events = usm.queryEvents(time - 5000, time)
+        val now = System.currentTimeMillis()
+        val events = usm.queryEvents(now - 5000, now)
         val event = UsageEvents.Event()
 
-        var newPkg = ""
+        var detectedPkg = ""
+        var lastEventTime = 0L
+
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                newPkg = event.packageName
+                detectedPkg = event.packageName
+                lastEventTime = event.timeStamp
             }
         }
 
-        if (newPkg.isNotEmpty() && newPkg != lastAppPackage) {
-            lastAppPackage = newPkg
-            logUsage(newPkg)
+        if (detectedPkg.isNotEmpty() && detectedPkg != currentPackage) {
+            // Close old
+            if (currentPackage != "NONE") {
+                logSession(currentPackage, sessionStartTime, lastEventTime)
+            }
+            // Start new
+            currentPackage = detectedPkg
+            sessionStartTime = lastEventTime
+            Log.v(TAG, "📱 App Switch: $detectedPkg")
         }
     }
 
-    private fun logUsage(pkg: String) {
+    private fun logSession(pkg: String, start: Long, end: Long) {
+        val duration = (end - start) / 1000L
+        if (duration < 1) return
+
         val entry = JSONObject()
-        entry.put("timestamp", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
+        entry.put("event_type", "DIGITAL_SESSION")
         entry.put("app_package", pkg)
-        entry.put("event", "FOREGROUND")
+        entry.put("timestamp_start", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(start)))
+        entry.put("duration_sec", duration)
 
         try {
             FileOutputStream(tempFile, true).use { it.write((entry.toString() + "\n").toByteArray()) }
         } catch (e: Exception) { Log.e(TAG, "Write error", e) }
+    }
+
+    fun rotateLogFile(masterTimestamp: String) {
+        if (tempFile == null || !tempFile!!.exists() || tempFile!!.length() == 0L) return
+        val finalFile = File(context.getExternalFilesDir(null), "SCREEN_$masterTimestamp.jsonl")
+        if (tempFile!!.renameTo(finalFile)) {
+            tempFile = File(context.getExternalFilesDir(null), "temp_screen.jsonl")
+        }
+    }
+
+    fun cleanup() {
+        stopTracking()
+        tempFile?.delete()
     }
 
     companion object { const val TAG = "TheMirrorScreen" }

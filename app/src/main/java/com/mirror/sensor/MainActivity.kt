@@ -1,17 +1,19 @@
 package com.mirror.sensor
 
 import android.Manifest
-import android.content.Intent
+import android.app.AppOpsManager
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
+import android.os.Process
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mirror.sensor.ui.screens.MainScreen
 import com.mirror.sensor.viewmodel.MainViewModel
 
@@ -21,19 +23,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                // Manually scoped to Activity to survive Navigation
-                val mainViewModel: androidx.lifecycle.ViewModel = androidx.lifecycle.viewmodel.compose.viewModel<MainViewModel>()
-
+                val mainViewModel: MainViewModel = viewModel()
                 Surface {
                     MainScreen(
                         onToggleService = { isRunning ->
-                            if (isRunning) {
-                                (mainViewModel as MainViewModel).stopService()
-                            } else {
-                                checkAllPermissionsAndStart(mainViewModel as MainViewModel)
-                            }
+                            if (isRunning) mainViewModel.stopService()
+                            else checkAllPermissionsAndStart(mainViewModel)
                         },
-                        viewModel = mainViewModel as MainViewModel
+                        viewModel = mainViewModel
                     )
                 }
             }
@@ -41,45 +38,37 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkAllPermissionsAndStart(viewModel: MainViewModel) {
-        // 1. Runtime Permissions (Mic, Location, Physical)
+        // 1. RUNTIME PERMISSIONS
         val permissions = mutableListOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION
         )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            permissions.add(Manifest.permission.ACTIVITY_RECOGNITION)
-        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        val allGranted = permissions.all {
+        val allRuntimeGranted = permissions.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
 
-        if (!allGranted) {
+        // 2. USAGE STATS
+        val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
+        } else {
+            appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
+        }
+        val hasUsageStats = mode == AppOpsManager.MODE_ALLOWED
+
+        if (!allRuntimeGranted || !hasUsageStats) {
             Toast.makeText(this, "Permissions missing. Re-run onboarding.", Toast.LENGTH_LONG).show()
-            // In a real app, you might want to reset onboarding flag or show dialog
             return
         }
 
-        // 2. Notification Listener Check (Optional, but kept for NotificationService)
-        // If user didn't enable it, we just warn or skip
-        /* if (!isNotificationListenerEnabled()) {
-            Toast.makeText(this, "Notification access for digital context is missing", Toast.LENGTH_SHORT).show()
-            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-            return
-        }
-        */
-
-        // ALL GREEN -> START ENGINE
+        // ALL GREEN -> START
         viewModel.startService()
         Toast.makeText(this, "The Mirror is Active", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun isNotificationListenerEnabled(): Boolean {
-        val enabled = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
-        return enabled?.contains(packageName) == true
     }
 }
