@@ -16,7 +16,7 @@ import com.mirror.sensor.data.UploadConfig
 import com.mirror.sensor.data.db.AppDatabase
 import com.mirror.sensor.data.db.SessionStateEntity
 import com.mirror.sensor.data.db.UploadQueueEntity
-import com.mirror.sensor.services.AudioService // NEW
+import com.mirror.sensor.services.AudioService
 import com.mirror.sensor.services.PhysicalService
 import com.mirror.sensor.services.ScreenService
 import com.mirror.sensor.workers.ContextUploadWorker
@@ -41,41 +41,45 @@ class SessionManager(private val context: Context) {
     private var currentSessionId: String? = null
     private var currentSeqIndex: Int = 0
 
-    // Service Bindings
+    // --- SERVICE BINDINGS ---
     private var physicalService: PhysicalService? = null
-    private var audioService: AudioService? = null // NEW
+    private var audioService: AudioService? = null
 
     private val physConnection = object : ServiceConnection {
         override fun onServiceConnected(className: ComponentName, service: IBinder) {
             physicalService = (service as PhysicalService.LocalBinder).getService()
+            Log.i(TAG, "PhysicalService Bound")
         }
         override fun onServiceDisconnected(arg0: ComponentName) { physicalService = null }
     }
 
-    private val audioConnection = object : ServiceConnection { // NEW
+    private val audioConnection = object : ServiceConnection {
         override fun onServiceConnected(className: ComponentName, service: IBinder) {
             audioService = (service as AudioService.LocalBinder).getService()
+            Log.i(TAG, "AudioService Bound")
         }
         override fun onServiceDisconnected(arg0: ComponentName) { audioService = null }
     }
 
     init {
-        // Bind Physical
+        // Bind to Services
         context.bindService(Intent(context, PhysicalService::class.java), physConnection, Context.BIND_AUTO_CREATE)
-        // Bind Audio
         context.bindService(Intent(context, AudioService::class.java), audioConnection, Context.BIND_AUTO_CREATE)
 
         scope.launch {
             val dao = db.uploadDao()
             dao.resetStuckUploads()
 
+            // Resume Logic
             val savedState = dao.getActiveSession()
             if (savedState != null && savedState.is_active) {
                 currentUserId = savedState.user_id
                 currentSessionId = savedState.session_id
-                currentSeqIndex = savedState.last_seq_index + 1
+                currentSeqIndex = savedState.last_seq_index + 1 // New shard on resume
 
                 log("SESSION_RESUMED", currentSessionId!!, currentSeqIndex, emptyMap())
+
+                // Immediately start logging to the new shard
                 startLoggingForCurrentShard()
                 startTicker()
             }
@@ -84,6 +88,7 @@ class SessionManager(private val context: Context) {
 
     fun startSession(userId: String) {
         if (!UploadConfig.SESSION_CHUNKING_ENABLED) return
+
         scope.launch {
             if (currentSessionId != null) return@launch
 
@@ -110,10 +115,10 @@ class SessionManager(private val context: Context) {
         // 1. Physical
         physicalService?.startLogging(File(context.filesDir, "PHYS_${sessId}_$seq.jsonl"))
 
-        // 2. Screen
+        // 2. Screen (Singleton)
         ScreenService.get()?.startLogging(File(context.filesDir, "SCREEN_${sessId}_$seq.jsonl"))
 
-        // 3. Audio (NEW)
+        // 3. Audio
         audioService?.startRecording(File(context.filesDir, "AUDIO_${sessId}_$seq.m4a"))
     }
 
@@ -121,10 +126,12 @@ class SessionManager(private val context: Context) {
         scope.launch {
             val sessionId = currentSessionId ?: return@launch
 
+            // Stop All
             physicalService?.stopLogging()
             ScreenService.get()?.stopLogging()
-            audioService?.stopRecording() // NEW
+            audioService?.stopRecording()
 
+            // Seal Final
             sealShard(currentUserId!!, sessionId, currentSeqIndex, isFinal = true)
 
             tickerJob?.cancel()
@@ -141,20 +148,22 @@ class SessionManager(private val context: Context) {
         tickerJob = scope.launch {
             while (isActive) {
                 delay(UploadConfig.SHARD_DURATION_MS)
+
                 val sessId = currentSessionId
                 val uid = currentUserId
 
                 if (sessId != null && uid != null) {
                     val nextSeq = currentSeqIndex + 1
 
-                    // Rotate All Services
+                    // 1. Rotate Services
                     physicalService?.rotateLog(File(context.filesDir, "PHYS_${sessId}_$nextSeq.jsonl"))
                     ScreenService.get()?.rotateLog(File(context.filesDir, "SCREEN_${sessId}_$nextSeq.jsonl"))
-                    audioService?.rotateRecording(File(context.filesDir, "AUDIO_${sessId}_$nextSeq.m4a")) // NEW
+                    audioService?.rotateRecording(File(context.filesDir, "AUDIO_${sessId}_$nextSeq.m4a"))
 
-                    // Seal Old
+                    // 2. Seal Old
                     sealShard(uid, sessId, currentSeqIndex, isFinal = false)
 
+                    // 3. Update State
                     currentSeqIndex = nextSeq
                     val dao = db.uploadDao()
                     val state = dao.getActiveSession()
@@ -170,17 +179,13 @@ class SessionManager(private val context: Context) {
         val traceId = UUID.randomUUID().toString()
         val dao = db.uploadDao()
 
-        // FIX: Added 'suspend' keyword here so it can call dao.insertQueueItem
+        // Helper to check and queue
         suspend fun queueIfExists(type: String, filename: String) {
             val path = File(context.filesDir, filename).absolutePath
             if (File(path).exists()) {
                 dao.insertQueueItem(UploadQueueEntity(
-                    user_id = userId,
-                    session_id = sessionId,
-                    seq_index = seq,
-                    trace_id = traceId,
-                    file_path = path,
-                    file_type = type
+                    user_id = userId, session_id = sessionId, seq_index = seq,
+                    trace_id = traceId, file_path = path, file_type = type
                 ))
             }
         }
@@ -192,26 +197,20 @@ class SessionManager(private val context: Context) {
         // Trigger Workers
         val inputData = Data.Builder().putString("USER_ID", userId).build()
 
-        // Context Worker
         WorkManager.getInstance(context).enqueueUniqueWork(
-            "context_worker_$userId",
-            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            "context_worker_$userId", ExistingWorkPolicy.APPEND_OR_REPLACE,
             OneTimeWorkRequestBuilder<ContextUploadWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .addTag(UploadConfig.TAG_CONTEXT)
-                .setInputData(inputData)
-                .build()
+                .setInputData(inputData).build()
         )
 
-        // Heavy Worker
         WorkManager.getInstance(context).enqueueUniqueWork(
-            "heavy_worker_$userId",
-            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            "heavy_worker_$userId", ExistingWorkPolicy.APPEND_OR_REPLACE,
             OneTimeWorkRequestBuilder<HeavyUploadWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build())
                 .addTag(UploadConfig.TAG_HEAVY)
-                .setInputData(inputData)
-                .build()
+                .setInputData(inputData).build()
         )
     }
 
@@ -222,6 +221,10 @@ class SessionManager(private val context: Context) {
         json.put("seq_index", seq)
         json.put("ts", System.currentTimeMillis())
         extras.forEach { (k, v) -> json.put(k, v) }
-        Log.i("MirrorSession", json.toString())
+        Log.i(TAG, json.toString())
+    }
+
+    companion object {
+        const val TAG = "MirrorSession"
     }
 }

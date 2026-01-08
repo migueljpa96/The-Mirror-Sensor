@@ -7,7 +7,6 @@ import android.os.Binder
 import android.os.IBinder
 import android.util.Log
 import java.io.File
-import java.io.IOException
 
 class AudioService : Service() {
 
@@ -33,35 +32,33 @@ class AudioService : Service() {
             return
         }
 
-        Log.i(TAG, "Starting Audio: ${file.name}")
+        Log.i(TAG, "🎙️ Starting Audio: ${file.name}")
         startRecorderInternal(file)
     }
 
     fun rotateRecording(newFile: File) {
-        Log.i(TAG, "Rotating Audio to: ${newFile.name}")
-
-        // 1. Stop current
+        Log.i(TAG, "🔄 Rotating Audio to: ${newFile.name}")
+        // 1. Stop current (Flushes to disk)
         stopRecorderInternal()
 
-        // 2. Start new
+        // 2. Start new immediately
         startRecorderInternal(newFile)
     }
 
     fun stopRecording() {
-        Log.i(TAG, "Stopping Audio")
+        Log.i(TAG, "🛑 Stopping Audio")
         stopRecorderInternal()
     }
 
     private fun startRecorderInternal(file: File) {
         try {
-            // Ensure directory exists
             file.parentFile?.mkdirs()
 
             recorder = MediaRecorder().apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioEncodingBitRate(64000) // 64kbps is sufficient for voice
+                setAudioEncodingBitRate(64000) // 64kbps (Voice Quality)
                 setAudioSamplingRate(44100)
                 setOutputFile(file.absolutePath)
                 prepare()
@@ -83,9 +80,7 @@ class AudioService : Service() {
                 release()
             }
         } catch (e: Exception) {
-            // Stop failed (e.g., started but immediate stop, or no data)
-            Log.e(TAG, "Error stopping recorder", e)
-            // If empty file created, delete it to avoid clutter
+            Log.e(TAG, "Error stopping recorder (Empty file?)", e)
             currentFile?.delete()
         } finally {
             recorder = null
