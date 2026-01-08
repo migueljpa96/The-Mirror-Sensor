@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     id("com.google.gms.google-services")
     alias(libs.plugins.kotlin.compose)
+    id("kotlin-kapt")
 }
 
 android {
@@ -72,4 +73,13 @@ dependencies {
 
     // DEBUGGING
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // DB
+    val room_version = "2.8.4"
+    implementation("androidx.room:room-runtime:$room_version")
+    implementation("androidx.room:room-ktx:$room_version")
+    kapt("androidx.room:room-compiler:$room_version")
+
+    // WORK MANAGER
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
 }
