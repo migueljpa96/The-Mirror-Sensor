@@ -63,8 +63,11 @@ class SessionManager(private val context: Context) {
 
     init {
         // Bind to Services
-        context.bindService(Intent(context, PhysicalService::class.java), physConnection, Context.BIND_AUTO_CREATE)
-        context.bindService(Intent(context, AudioService::class.java), audioConnection, Context.BIND_AUTO_CREATE)
+        val physIntent = Intent(context, PhysicalService::class.java)
+        context.bindService(physIntent, physConnection, Context.BIND_AUTO_CREATE)
+
+        val audioIntent = Intent(context, AudioService::class.java)
+        context.bindService(audioIntent, audioConnection, Context.BIND_AUTO_CREATE)
 
         scope.launch {
             val dao = db.uploadDao()
