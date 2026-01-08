@@ -1,110 +1,117 @@
 package com.mirror.sensor.services
 
-import android.app.usage.UsageEvents
-import android.app.usage.UsageStatsManager
-import android.content.Context
-import android.os.Handler
-import android.os.Looper
+import android.accessibilityservice.AccessibilityService
 import android.util.Log
-import org.json.JSONObject
+import android.view.accessibility.AccessibilityEvent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
+import java.io.BufferedWriter
 import java.io.File
-import java.io.FileOutputStream
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.io.FileWriter
+import java.io.IOException
+import java.lang.ref.WeakReference
 
-class ScreenService(private val context: Context) {
+class ScreenService : AccessibilityService() {
 
-    private var tempFile: File? = null
-    private val handler = Handler(Looper.getMainLooper())
-    private var isRunning = false
+    private val writingScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val logChannel = Channel<String>(capacity = 1000)
 
-    // Session State
-    private var currentPackage = "NONE"
-    private var sessionStartTime = 0L
+    private var currentWriter: BufferedWriter? = null
+    private var isLogging = false
 
-    private val pollRunnable = object : Runnable {
-        override fun run() {
-            if (!isRunning) return
-            checkAppSwitch()
-            handler.postDelayed(this, 2000)
-        }
-    }
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        Log.i(TAG, "ScreenService Connected")
+        instance = WeakReference(this)
 
-    fun startTracking() {
-        Log.d(TAG, "⚡ Screen Session-Tracker Started")
-        isRunning = true
-        tempFile = File(context.getExternalFilesDir(null), "temp_screen.jsonl")
-
-        currentPackage = "NONE"
-        sessionStartTime = System.currentTimeMillis()
-
-        handler.post(pollRunnable)
-    }
-
-    fun stopTracking() {
-        // Close final session
-        logSession(currentPackage, sessionStartTime, System.currentTimeMillis())
-        isRunning = false
-        handler.removeCallbacks(pollRunnable)
-    }
-
-    private fun checkAppSwitch() {
-        val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val now = System.currentTimeMillis()
-        val events = usm.queryEvents(now - 5000, now)
-        val event = UsageEvents.Event()
-
-        var detectedPkg = ""
-        var lastEventTime = 0L
-
-        while (events.hasNextEvent()) {
-            events.getNextEvent(event)
-            if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                detectedPkg = event.packageName
-                lastEventTime = event.timeStamp
+        // Start consumer
+        writingScope.launch {
+            for (line in logChannel) {
+                try {
+                    currentWriter?.write(line)
+                    currentWriter?.newLine()
+                } catch (e: IOException) {
+                    Log.e(TAG, "Write failed", e)
+                }
             }
         }
-
-        if (detectedPkg.isNotEmpty() && detectedPkg != currentPackage) {
-            // Close old
-            if (currentPackage != "NONE") {
-                logSession(currentPackage, sessionStartTime, lastEventTime)
-            }
-            // Start new
-            currentPackage = detectedPkg
-            sessionStartTime = lastEventTime
-            Log.v(TAG, "📱 App Switch: $detectedPkg")
-        }
     }
 
-    private fun logSession(pkg: String, start: Long, end: Long) {
-        val duration = (end - start) / 1000L
-        if (duration < 1) return
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (!isLogging || event == null) return
 
-        val entry = JSONObject()
-        entry.put("event_type", "DIGITAL_SESSION")
-        entry.put("app_package", pkg)
-        entry.put("timestamp_start", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(start)))
-        entry.put("duration_sec", duration)
+        // Privacy: We only capture package names and event types for context, NOT text content
+        // unless explicitly intended. For "Mirror", we typically want broad context.
+        // Format: {"ts":123,"pkg":"com.app","type":1}
 
+        val pkg = event.packageName?.toString() ?: "unknown"
+        val type = event.eventType
+
+        // Simple JSON serialization
+        val line = "{\"ts\":${System.currentTimeMillis()},\"pkg\":\"$pkg\",\"type\":$type}"
+        logChannel.trySend(line)
+    }
+
+    override fun onInterrupt() {
+        Log.w(TAG, "ScreenService Interrupted")
+    }
+
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        instance = null
+        writingScope.cancel()
+        closeCurrentFile()
+        return super.onUnbind(intent)
+    }
+
+    // --- Control Methods ---
+
+    fun startLogging(file: File) {
+        Log.i(TAG, "Starting logging to: ${file.name}")
+        closeCurrentFile()
         try {
-            FileOutputStream(tempFile, true).use { it.write((entry.toString() + "\n").toByteArray()) }
-        } catch (e: Exception) { Log.e(TAG, "Write error", e) }
-    }
-
-    fun rotateLogFile(masterTimestamp: String) {
-        if (tempFile == null || !tempFile!!.exists() || tempFile!!.length() == 0L) return
-        val finalFile = File(context.getExternalFilesDir(null), "SCREEN_$masterTimestamp.jsonl")
-        if (tempFile!!.renameTo(finalFile)) {
-            tempFile = File(context.getExternalFilesDir(null), "temp_screen.jsonl")
+            currentWriter = BufferedWriter(FileWriter(file, true))
+            isLogging = true
+        } catch (e: IOException) {
+            Log.e(TAG, "Failed to open file", e)
         }
     }
 
-    fun cleanup() {
-        stopTracking()
-        tempFile?.delete()
+    fun rotateLog(newFile: File) {
+        Log.i(TAG, "Rotating log to: ${newFile.name}")
+        closeCurrentFile()
+        try {
+            currentWriter = BufferedWriter(FileWriter(newFile, true))
+            isLogging = true
+        } catch (e: IOException) {
+            Log.e(TAG, "Failed to rotate file", e)
+        }
     }
 
-    companion object { const val TAG = "TheMirrorScreen" }
+    fun stopLogging() {
+        isLogging = false
+        closeCurrentFile()
+    }
+
+    private fun closeCurrentFile() {
+        try {
+            currentWriter?.flush()
+            currentWriter?.close()
+        } catch (e: IOException) {
+            // Ignore close errors
+        }
+        currentWriter = null
+    }
+
+    companion object {
+        const val TAG = "MirrorScreenService"
+
+        // Singleton access for SessionManager
+        var instance: WeakReference<ScreenService>? = null
+
+        fun get(): ScreenService? = instance?.get()
+    }
 }

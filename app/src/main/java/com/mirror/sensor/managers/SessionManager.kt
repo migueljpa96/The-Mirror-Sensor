@@ -1,6 +1,10 @@
 package com.mirror.sensor.managers
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
 import android.util.Log
 import androidx.work.Constraints
 import androidx.work.Data
@@ -12,6 +16,9 @@ import com.mirror.sensor.data.UploadConfig
 import com.mirror.sensor.data.db.AppDatabase
 import com.mirror.sensor.data.db.SessionStateEntity
 import com.mirror.sensor.data.db.UploadQueueEntity
+import com.mirror.sensor.services.AudioService // NEW
+import com.mirror.sensor.services.PhysicalService
+import com.mirror.sensor.services.ScreenService
 import com.mirror.sensor.workers.ContextUploadWorker
 import com.mirror.sensor.workers.HeavyUploadWorker
 import kotlinx.coroutines.CoroutineScope
@@ -34,42 +41,51 @@ class SessionManager(private val context: Context) {
     private var currentSessionId: String? = null
     private var currentSeqIndex: Int = 0
 
+    // Service Bindings
+    private var physicalService: PhysicalService? = null
+    private var audioService: AudioService? = null // NEW
+
+    private val physConnection = object : ServiceConnection {
+        override fun onServiceConnected(className: ComponentName, service: IBinder) {
+            physicalService = (service as PhysicalService.LocalBinder).getService()
+        }
+        override fun onServiceDisconnected(arg0: ComponentName) { physicalService = null }
+    }
+
+    private val audioConnection = object : ServiceConnection { // NEW
+        override fun onServiceConnected(className: ComponentName, service: IBinder) {
+            audioService = (service as AudioService.LocalBinder).getService()
+        }
+        override fun onServiceDisconnected(arg0: ComponentName) { audioService = null }
+    }
+
     init {
+        // Bind Physical
+        context.bindService(Intent(context, PhysicalService::class.java), physConnection, Context.BIND_AUTO_CREATE)
+        // Bind Audio
+        context.bindService(Intent(context, AudioService::class.java), audioConnection, Context.BIND_AUTO_CREATE)
+
         scope.launch {
             val dao = db.uploadDao()
+            dao.resetStuckUploads()
 
-            // 1. Crash Recovery
-            val resetCount = dao.resetStuckUploads()
-            if (resetCount > 0) log("CRASH_RECOVERY", "SYSTEM", -1, mapOf("reset" to resetCount))
-
-            // 2. Resume Session (Sequence Guard)
             val savedState = dao.getActiveSession()
             if (savedState != null && savedState.is_active) {
                 currentUserId = savedState.user_id
                 currentSessionId = savedState.session_id
-
-                // HARDENING: Sequence Guard
-                // We trust the DB state, but strictly ensure we increment from the last known point.
-                currentSeqIndex = savedState.last_seq_index
+                currentSeqIndex = savedState.last_seq_index + 1
 
                 log("SESSION_RESUMED", currentSessionId!!, currentSeqIndex, emptyMap())
+                startLoggingForCurrentShard()
                 startTicker()
             }
         }
     }
 
-    // HARDENING: userId is now mandatory to start a session
     fun startSession(userId: String) {
         if (!UploadConfig.SESSION_CHUNKING_ENABLED) return
-
         scope.launch {
-            if (currentSessionId != null) {
-                // Identity Check: Can't overwrite active session of another user
-                if (currentUserId != userId) {
-                    log("ERROR", "SYSTEM", -1, mapOf("msg" to "User mismatch on start"))
-                }
-                return@launch
-            }
+            if (currentSessionId != null) return@launch
 
             currentUserId = userId
             val newId = "sess_${System.currentTimeMillis()}_${UUID.randomUUID().toString().substring(0, 4)}"
@@ -77,21 +93,37 @@ class SessionManager(private val context: Context) {
             currentSeqIndex = 0
 
             db.uploadDao().setSessionState(SessionStateEntity(
-                user_id = userId,
-                session_id = newId,
-                start_ts = System.currentTimeMillis(),
-                last_seq_index = 0,
-                is_active = true
+                user_id = userId, session_id = newId, start_ts = System.currentTimeMillis(),
+                last_seq_index = 0, is_active = true
             ))
 
             log("SESSION_STARTED", newId, 0, mapOf("uid" to userId))
+            startLoggingForCurrentShard()
             startTicker()
         }
+    }
+
+    private fun startLoggingForCurrentShard() {
+        val sessId = currentSessionId ?: return
+        val seq = currentSeqIndex
+
+        // 1. Physical
+        physicalService?.startLogging(File(context.filesDir, "PHYS_${sessId}_$seq.jsonl"))
+
+        // 2. Screen
+        ScreenService.get()?.startLogging(File(context.filesDir, "SCREEN_${sessId}_$seq.jsonl"))
+
+        // 3. Audio (NEW)
+        audioService?.startRecording(File(context.filesDir, "AUDIO_${sessId}_$seq.m4a"))
     }
 
     fun stopSession() {
         scope.launch {
             val sessionId = currentSessionId ?: return@launch
+
+            physicalService?.stopLogging()
+            ScreenService.get()?.stopLogging()
+            audioService?.stopRecording() // NEW
 
             sealShard(currentUserId!!, sessionId, currentSeqIndex, isFinal = true)
 
@@ -99,7 +131,6 @@ class SessionManager(private val context: Context) {
             db.uploadDao().clearSessionState()
 
             log("SESSION_STOPPED", sessionId, currentSeqIndex, emptyMap())
-
             currentSessionId = null
             currentUserId = null
         }
@@ -110,14 +141,21 @@ class SessionManager(private val context: Context) {
         tickerJob = scope.launch {
             while (isActive) {
                 delay(UploadConfig.SHARD_DURATION_MS)
-                // Capture local state to avoid race conditions if stopSession called
                 val sessId = currentSessionId
                 val uid = currentUserId
 
                 if (sessId != null && uid != null) {
-                    sealShard(uid, sessId, currentSeqIndex, isFinal = false)
-                    currentSeqIndex++
+                    val nextSeq = currentSeqIndex + 1
 
+                    // Rotate All Services
+                    physicalService?.rotateLog(File(context.filesDir, "PHYS_${sessId}_$nextSeq.jsonl"))
+                    ScreenService.get()?.rotateLog(File(context.filesDir, "SCREEN_${sessId}_$nextSeq.jsonl"))
+                    audioService?.rotateRecording(File(context.filesDir, "AUDIO_${sessId}_$nextSeq.m4a")) // NEW
+
+                    // Seal Old
+                    sealShard(uid, sessId, currentSeqIndex, isFinal = false)
+
+                    currentSeqIndex = nextSeq
                     val dao = db.uploadDao()
                     val state = dao.getActiveSession()
                     if (state != null && state.session_id == sessId) {
@@ -129,60 +167,51 @@ class SessionManager(private val context: Context) {
     }
 
     private suspend fun sealShard(userId: String, sessionId: String, seq: Int, isFinal: Boolean) {
-        // HARDENING: Trace ID Generation
         val traceId = UUID.randomUUID().toString()
-        log("SHARD_SEALING", sessionId, seq, mapOf("trace_id" to traceId, "is_final" to isFinal))
-
         val dao = db.uploadDao()
 
-        // Define expected files (stubs)
-        val files = listOf(
-            Triple("PHYS_LOG", "PHYS_${sessionId}_$seq.jsonl", "phys"),
-            Triple("SCREEN_LOG", "SCREEN_${sessionId}_$seq.jsonl", "screen"),
-            Triple("AUDIO", "AUDIO_${sessionId}_$seq.m4a", "audio")
-        )
-
-        files.forEach { (type, filename, _) ->
+        // FIX: Added 'suspend' keyword here so it can call dao.insertQueueItem
+        suspend fun queueIfExists(type: String, filename: String) {
             val path = File(context.filesDir, filename).absolutePath
-
-            dao.insertQueueItem(UploadQueueEntity(
-                user_id = userId,
-                session_id = sessionId,
-                seq_index = seq,
-                trace_id = traceId, // All components of shard share trace_id
-                file_path = path,
-                file_type = type
-            ))
+            if (File(path).exists()) {
+                dao.insertQueueItem(UploadQueueEntity(
+                    user_id = userId,
+                    session_id = sessionId,
+                    seq_index = seq,
+                    trace_id = traceId,
+                    file_path = path,
+                    file_type = type
+                ))
+            }
         }
 
-        enqueueWorkers(userId)
-    }
+        queueIfExists("PHYS_LOG", "PHYS_${sessionId}_$seq.jsonl")
+        queueIfExists("SCREEN_LOG", "SCREEN_${sessionId}_$seq.jsonl")
+        queueIfExists("AUDIO", "AUDIO_${sessionId}_$seq.m4a")
 
-    private fun enqueueWorkers(userId: String) {
+        // Trigger Workers
         val inputData = Data.Builder().putString("USER_ID", userId).build()
 
-        val contextRequest = OneTimeWorkRequestBuilder<ContextUploadWorker>()
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .addTag(UploadConfig.TAG_CONTEXT)
-            .setInputData(inputData)
-            .build()
-
+        // Context Worker
         WorkManager.getInstance(context).enqueueUniqueWork(
-            "context_worker_$userId", // Unique per user
+            "context_worker_$userId",
             ExistingWorkPolicy.APPEND_OR_REPLACE,
-            contextRequest
+            OneTimeWorkRequestBuilder<ContextUploadWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .addTag(UploadConfig.TAG_CONTEXT)
+                .setInputData(inputData)
+                .build()
         )
 
-        val heavyRequest = OneTimeWorkRequestBuilder<HeavyUploadWorker>()
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build())
-            .addTag(UploadConfig.TAG_HEAVY)
-            .setInputData(inputData)
-            .build()
-
+        // Heavy Worker
         WorkManager.getInstance(context).enqueueUniqueWork(
             "heavy_worker_$userId",
             ExistingWorkPolicy.APPEND_OR_REPLACE,
-            heavyRequest
+            OneTimeWorkRequestBuilder<HeavyUploadWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build())
+                .addTag(UploadConfig.TAG_HEAVY)
+                .setInputData(inputData)
+                .build()
         )
     }
 
