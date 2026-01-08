@@ -2,13 +2,11 @@ package com.mirror.sensor.viewmodel
 
 import android.Manifest
 import android.app.Application
-import android.app.AppOpsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import android.os.Process
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
@@ -23,8 +21,8 @@ enum class OnboardingStep { TRANSPARENCY, SENSORS, DRILL }
 data class SensorState(
     val hasNotifications: Boolean = false,
     val hasMic: Boolean = false,
-    val hasUsage: Boolean = false,
     val hasLocation: Boolean = false
+    // Removed hasUsage
 )
 
 class OnboardingViewModel(application: Application) : AndroidViewModel(application) {
@@ -65,20 +63,14 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         val hasLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
-        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
-        } else {
-            appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
-        }
-        val hasUsage = mode == AppOpsManager.MODE_ALLOWED
+        // Usage Stats logic removed
 
-        _sensorState.value = SensorState(hasNotif, hasMic, hasUsage, hasLocation)
+        _sensorState.value = SensorState(hasNotif, hasMic, hasLocation)
     }
 
     fun areAllSensorsGranted(): Boolean {
         val s = _sensorState.value
-        return s.hasNotifications && s.hasMic && s.hasUsage && s.hasLocation
+        return s.hasNotifications && s.hasMic && s.hasLocation
     }
 
     fun moveToDrill() { if (areAllSensorsGranted()) _currentStep.value = OnboardingStep.DRILL }
@@ -94,13 +86,6 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
     fun openAppSettings(ctx: Context) {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
             data = Uri.fromParts("package", ctx.packageName, null)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        ctx.startActivity(intent)
-    }
-
-    fun openUsageSettings(ctx: Context) {
-        val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         ctx.startActivity(intent)

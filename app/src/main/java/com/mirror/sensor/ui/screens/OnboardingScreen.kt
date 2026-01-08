@@ -8,7 +8,6 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -68,7 +67,7 @@ fun OnboardingScreen(onComplete: () -> Unit, viewModel: OnboardingViewModel = vi
     LaunchedEffect(drillComplete) { if (drillComplete) onComplete() }
 
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).systemBarsPadding()) {
-        AnimatedContent(targetState = step, transitionSpec = { fadeIn(tween(600)) togetherWith fadeOut(tween(600)) }, label = "Onboarding") { currentStep ->
+        AnimatedContent(targetState = step, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "Onboarding") { currentStep ->
             when (currentStep) {
                 OnboardingStep.TRANSPARENCY -> TransparencyStep(viewModel)
                 OnboardingStep.SENSORS -> SensorGrantStep(viewModel)
@@ -127,10 +126,8 @@ fun SensorGrantStep(viewModel: OnboardingViewModel) {
         SensorCable("Spatial Context", if (sensorState.hasLocation) "Active: Location logging enabled." else "Tap to grant location access.", Icons.Default.LocationOn, sensorState.hasLocation) {
             handlePermissionClick(Manifest.permission.ACCESS_FINE_LOCATION, sensorState.hasLocation, locationLauncher)
         }
-        Spacer(modifier = Modifier.height(16.dp))
-        SensorCable("Focus Tracking", if (sensorState.hasUsage) "Active: App usage visible." else "Tap to find 'The Mirror' and enable.", Icons.Default.DataUsage, sensorState.hasUsage) {
-            if (!sensorState.hasUsage) viewModel.openUsageSettings(context)
-        }
+
+        // Removed Focus Tracking (Usage Stats) cable
 
         Spacer(modifier = Modifier.weight(1f))
         Spacer(modifier = Modifier.height(32.dp))
@@ -141,8 +138,7 @@ fun SensorGrantStep(viewModel: OnboardingViewModel) {
     }
 }
 
-// ... Reuse TransparencyStep, DrillStep, SwipeToSign, PromiseItem, SensorCable from previous code ...
-// (I will assume you have these composables or can copy them from previous files as they are unchanged)
+// ... TransparencyStep, DrillStep, SwipeToSign, PromiseItem, SensorCable remain same ...
 @Composable
 fun TransparencyStep(viewModel: OnboardingViewModel) {
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.SpaceBetween, horizontalAlignment = Alignment.CenterHorizontally) {

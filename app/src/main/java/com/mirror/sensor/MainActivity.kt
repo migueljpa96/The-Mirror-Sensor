@@ -1,12 +1,9 @@
 package com.mirror.sensor
 
 import android.Manifest
-import android.app.AppOpsManager
-import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.os.Process
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -38,7 +35,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkAllPermissionsAndStart(viewModel: MainViewModel) {
-        // 1. RUNTIME PERMISSIONS
+        // 1. RUNTIME PERMISSIONS ONLY
         val permissions = mutableListOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.ACCESS_FINE_LOCATION,
@@ -53,16 +50,7 @@ class MainActivity : ComponentActivity() {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
 
-        // 2. USAGE STATS
-        val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
-        } else {
-            appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
-        }
-        val hasUsageStats = mode == AppOpsManager.MODE_ALLOWED
-
-        if (!allRuntimeGranted || !hasUsageStats) {
+        if (!allRuntimeGranted) {
             Toast.makeText(this, "Permissions missing. Re-run onboarding.", Toast.LENGTH_LONG).show()
             return
         }
