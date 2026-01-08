@@ -41,34 +41,28 @@ import kotlin.math.sqrt
 
 class PhysicalService : Service(), SensorEventListener, LocationListener {
 
+    // ... (Variables remain the same) ...
     private val binder = LocalBinder()
     private lateinit var sensorManager: SensorManager
     private lateinit var locationManager: LocationManager
 
-    // IO Handling
     private val writingScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val logChannel = Channel<String>(capacity = 1000)
     private var currentWriter: BufferedWriter? = null
     private var isLogging = false
 
-    // State
+    // ... (State variables remain the same) ...
     private var lastConfirmedPosture = "UNKNOWN"
     private var lastConfirmedMotion = "STATIONARY"
-
-    // Accumulators
     private var luxSum = 0f
     private var luxCount = 0
     private var lastLocation: Location? = null
     private var lastLoggedLocation: Location? = null
-
-    // Motion
     private var motionEnergySum = 0f
     private var motionSampleCount = 0
     private var currentAcc = FloatArray(3)
     private var isProximityNear = false
     private var currentPressure = 0f
-
-    // Config
     private val FLUSH_INTERVAL_MS = 5 * 60 * 1000L
     private var lastFlushTime = System.currentTimeMillis()
 
@@ -86,9 +80,9 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
         createNotificationChannel()
-        startForegroundService()
+        // FIX: REMOVED startForegroundService() from here.
+        // It caused a crash because permissions aren't granted on first launch yet.
 
-        // Start IO Consumer
         writingScope.launch {
             for (line in logChannel) {
                 try {
@@ -101,18 +95,23 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
         }
     }
 
+    // ... (startForegroundService and createNotificationChannel methods remain the same) ...
     private fun startForegroundService() {
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Mirror Sensor Active")
             .setContentText("Logging physical context...")
-            .setSmallIcon(R.drawable.ic_launcher_foreground) // Ensure this resource exists
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setOngoing(true)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
-        } else {
-            startForeground(1001, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+            } else {
+                startForeground(1001, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start foreground service", e)
         }
     }
 
@@ -132,6 +131,11 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
 
     fun startLogging(file: File) {
         Log.i(TAG, "⚡ Starting Logging to: ${file.name}")
+
+        // FIX: MOVED HERE. Only promote to foreground when actually starting.
+        // By this time, MainActivity has already verified permissions.
+        startForegroundService()
+
         closeCurrentFile()
         try {
             file.parentFile?.mkdirs()
@@ -143,6 +147,7 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
         }
     }
 
+    // ... (rotateLog, stopLogging, and rest of file remain exactly the same) ...
     fun rotateLog(newFile: File) {
         Log.i(TAG, "🔄 Rotating Log to: ${newFile.name}")
         flushSession("ROTATION")
@@ -151,7 +156,6 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
             newFile.parentFile?.mkdirs()
             currentWriter = BufferedWriter(FileWriter(newFile, true))
             isLogging = true
-            // Reset accumulators for new shard
             luxSum = 0f
             luxCount = 0
         } catch (e: IOException) {
@@ -175,8 +179,6 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
         } catch (e: Exception) {}
         currentWriter = null
     }
-
-    // --- SENSOR LOGIC (Simplified for brevity, same logic as before) ---
 
     @SuppressLint("MissingPermission")
     private fun registerSensors() {
@@ -224,11 +226,10 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
         motionEnergySum += energy
         motionSampleCount++
 
-        if (motionSampleCount >= 50) { // ~1 sec
+        if (motionSampleCount >= 50) {
             val avgEnergy = motionEnergySum / motionSampleCount
             lastConfirmedMotion = if (avgEnergy > 0.5f) "MOVING" else "STATIONARY"
 
-            // Posture Check
             val yVal = currentAcc[1]
             val zVal = currentAcc[2]
             lastConfirmedPosture = when {
@@ -242,7 +243,6 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
             motionEnergySum = 0f
             motionSampleCount = 0
 
-            // Heartbeat
             if (System.currentTimeMillis() - lastFlushTime > FLUSH_INTERVAL_MS) {
                 flushSession("HEARTBEAT")
             }
