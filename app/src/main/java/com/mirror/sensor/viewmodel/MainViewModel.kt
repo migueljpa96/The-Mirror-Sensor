@@ -2,38 +2,60 @@ package com.mirror.sensor.viewmodel
 
 import android.app.Application
 import android.content.Context
-import androidx.lifecycle.AndroidViewModel
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import androidx.core.content.edit
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.mirror.sensor.data.db.AppDatabase
+import com.mirror.sensor.managers.SessionManager
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
+    private val sessionManager = SessionManager(application)
+    private val dao = AppDatabase.getDatabase(application).uploadDao()
     private val context = application.applicationContext
     private val prefs = context.getSharedPreferences("mirror_prefs", Context.MODE_PRIVATE)
 
-    // Service State
+    // Service State (Matches MainScreen expectation)
     private val _isServiceRunning = MutableStateFlow(false)
-    val isServiceRunning = _isServiceRunning.asStateFlow()
+    val isServiceRunning: StateFlow<Boolean> = _isServiceRunning.asStateFlow()
 
-    // Onboarding State
+    // Onboarding State (Restored)
     private val _hasCompletedOnboarding = MutableStateFlow(prefs.getBoolean("onboarding_complete", false))
-    val hasCompletedOnboarding = _hasCompletedOnboarding.asStateFlow()
+    val hasCompletedOnboarding: StateFlow<Boolean> = _hasCompletedOnboarding.asStateFlow()
+
+    init {
+        checkTrackingState()
+    }
+
+    private fun checkTrackingState() {
+        viewModelScope.launch {
+            // Check DB for truth
+            val activeSession = dao.getActiveSession()
+            _isServiceRunning.value = activeSession != null && activeSession.is_active
+        }
+    }
 
     fun setOnboardingComplete() {
         prefs.edit { putBoolean("onboarding_complete", true) }
         _hasCompletedOnboarding.value = true
     }
 
-    // --- NEW METHODS FOR MAINACTIVITY ---
-
     fun startService() {
-        MasterService.startService(context)
-        _isServiceRunning.value = true
+        viewModelScope.launch {
+            // TODO: Pass actual user ID in future
+            sessionManager.startSession("user_local")
+            _isServiceRunning.value = true
+        }
     }
 
     fun stopService() {
-        MasterService.stopService(context)
-        _isServiceRunning.value = false
+        viewModelScope.launch {
+            sessionManager.stopSession()
+            _isServiceRunning.value = false
+        }
     }
 }

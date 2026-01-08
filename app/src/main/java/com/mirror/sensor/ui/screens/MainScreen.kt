@@ -1,6 +1,6 @@
 package com.mirror.sensor.ui.screens
 
-import android.app.Activity
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -20,7 +20,6 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -52,6 +51,9 @@ fun MainScreen(
     val isRunning by viewModel.isServiceRunning.collectAsState()
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
+
+    // FIX: Explicitly cast context to ComponentActivity for ViewModelStoreOwner
+    val activityOwner = context as ComponentActivity
 
     val topLevelRoutes = listOf("Stream", "Reflection", "Oracle")
     val icons = listOf(
@@ -158,20 +160,16 @@ fun MainScreen(
             }
 
             composable("Reflection") {
-                // Share HomeViewModel for memory data
+                // FIX: Use activityOwner here
                 ReflectionScreen(
-                    homeViewModel = viewModel<HomeViewModel>(
-                        viewModelStoreOwner = context as Activity as ViewModelStoreOwner
-                    )
+                    homeViewModel = viewModel<HomeViewModel>(viewModelStoreOwner = activityOwner)
                 )
             }
 
             composable("Oracle") {
-                // Share HomeViewModel, Create new OracleViewModel
+                // FIX: Use activityOwner here
                 OracleScreen(
-                    homeViewModel = viewModel<HomeViewModel>(
-                        viewModelStoreOwner = context as Activity as ViewModelStoreOwner
-                    ),
+                    homeViewModel = viewModel<HomeViewModel>(viewModelStoreOwner = activityOwner),
                     oracleViewModel = viewModel<OracleViewModel>()
                 )
             }
@@ -185,12 +183,11 @@ fun MainScreen(
 
             composable("MemoryDetail/{memoryId}") { backStackEntry ->
                 val id = backStackEntry.arguments?.getString("memoryId") ?: return@composable
+                // FIX: Use activityOwner here
                 MemoryDetailScreen(
                     memoryId = id,
                     onBack = { navController.popBackStack() },
-                    viewModel = viewModel<HomeViewModel>(
-                        viewModelStoreOwner = context as Activity as ViewModelStoreOwner
-                    )
+                    viewModel = viewModel<HomeViewModel>(viewModelStoreOwner = activityOwner)
                 )
             }
         }
