@@ -19,6 +19,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.os.Looper // <--- ADD THIS IMPORT
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.mirror.sensor.R
@@ -41,28 +42,34 @@ import kotlin.math.sqrt
 
 class PhysicalService : Service(), SensorEventListener, LocationListener {
 
-    // ... (Variables remain the same) ...
     private val binder = LocalBinder()
     private lateinit var sensorManager: SensorManager
     private lateinit var locationManager: LocationManager
 
+    // IO Handling
     private val writingScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val logChannel = Channel<String>(capacity = 1000)
     private var currentWriter: BufferedWriter? = null
     private var isLogging = false
 
-    // ... (State variables remain the same) ...
+    // State
     private var lastConfirmedPosture = "UNKNOWN"
     private var lastConfirmedMotion = "STATIONARY"
+
+    // Accumulators
     private var luxSum = 0f
     private var luxCount = 0
     private var lastLocation: Location? = null
     private var lastLoggedLocation: Location? = null
+
+    // Motion
     private var motionEnergySum = 0f
     private var motionSampleCount = 0
     private var currentAcc = FloatArray(3)
     private var isProximityNear = false
     private var currentPressure = 0f
+
+    // Config
     private val FLUSH_INTERVAL_MS = 5 * 60 * 1000L
     private var lastFlushTime = System.currentTimeMillis()
 
@@ -80,9 +87,9 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
         createNotificationChannel()
-        // FIX: REMOVED startForegroundService() from here.
-        // It caused a crash because permissions aren't granted on first launch yet.
+        // Removed premature startForegroundService
 
+        // Start IO Consumer
         writingScope.launch {
             for (line in logChannel) {
                 try {
@@ -95,7 +102,6 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
         }
     }
 
-    // ... (startForegroundService and createNotificationChannel methods remain the same) ...
     private fun startForegroundService() {
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Mirror Sensor Active")
@@ -132,8 +138,7 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
     fun startLogging(file: File) {
         Log.i(TAG, "⚡ Starting Logging to: ${file.name}")
 
-        // FIX: MOVED HERE. Only promote to foreground when actually starting.
-        // By this time, MainActivity has already verified permissions.
+        // Promote to Foreground on Start
         startForegroundService()
 
         closeCurrentFile()
@@ -147,7 +152,6 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
         }
     }
 
-    // ... (rotateLog, stopLogging, and rest of file remain exactly the same) ...
     fun rotateLog(newFile: File) {
         Log.i(TAG, "🔄 Rotating Log to: ${newFile.name}")
         flushSession("ROTATION")
@@ -180,6 +184,8 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
         currentWriter = null
     }
 
+    // --- SENSOR LOGIC ---
+
     @SuppressLint("MissingPermission")
     private fun registerSensors() {
         val accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
@@ -193,8 +199,17 @@ class PhysicalService : Service(), SensorEventListener, LocationListener {
         sensorManager.registerListener(this, pressure, SensorManager.SENSOR_DELAY_NORMAL)
 
         try {
-            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 10000L, 20f, this)
-        } catch (e: Exception) { Log.e(TAG, "GPS Permission Error", e) }
+            // FIX: Explicitly use Main Looper to avoid Thread crash
+            locationManager.requestLocationUpdates(
+                LocationManager.GPS_PROVIDER,
+                10000L,
+                20f,
+                this,
+                Looper.getMainLooper()
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "GPS Permission Error or Thread Issue", e)
+        }
     }
 
     private fun unregisterSensors() {
