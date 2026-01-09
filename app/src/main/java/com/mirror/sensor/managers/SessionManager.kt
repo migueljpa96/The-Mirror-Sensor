@@ -1,9 +1,13 @@
 package com.mirror.sensor.managers
 
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.os.IBinder
 import android.util.Log
 import androidx.work.*
@@ -13,26 +17,39 @@ import com.mirror.sensor.data.db.SessionStateEntity
 import com.mirror.sensor.data.db.UploadQueueEntity
 import com.mirror.sensor.services.AudioService
 import com.mirror.sensor.services.PhysicalService
-import com.mirror.sensor.services.ScreenService
 import com.mirror.sensor.workers.ContextUploadWorker
 import com.mirror.sensor.workers.HeavyUploadWorker
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import java.io.BufferedWriter
 import java.io.File
+import java.io.FileWriter
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+
+// Helper Data Class for cached app info
+data class AppInfo(
+    val label: String,
+    val isSystem: Boolean,
+    val category: String?
+)
 
 class SessionManager(private val context: Context) {
 
     private val db = AppDatabase.getDatabase(context)
     private val scope = CoroutineScope(Dispatchers.IO + Job())
+
     private var tickerJob: Job? = null
+    private var screenPollerJob: Job? = null
 
     // Thresholds
-    private val MIN_SESSION_DURATION_MS = 5000L // Reduced to 5s for easier testing
+    private val MIN_SESSION_DURATION_MS = 5000L
     private val MIN_FILE_SIZE_BYTES = 10L
+    private val SCREEN_POLL_INTERVAL_MS = 2000L
 
     // State
     private var currentUserId: String? = null
@@ -40,7 +57,12 @@ class SessionManager(private val context: Context) {
     private var currentSeqIndex: Int = 0
     private var sessionStartTime: Long = 0L
 
-    // Service Binding Synchronization
+    // Screen State & Caching
+    private var lastPackageName: String = ""
+    private var screenWriter: BufferedWriter? = null
+    private val appInfoCache = ConcurrentHashMap<String, AppInfo>()
+
+    // Services
     private var physicalService: PhysicalService? = null
     private var audioService: AudioService? = null
     private val boundSignal = CompletableDeferred<Unit>()
@@ -77,16 +99,12 @@ class SessionManager(private val context: Context) {
 
             val savedState = dao.getActiveSession()
             if (savedState != null && savedState.is_active) {
-                // Wait for services before resuming
                 boundSignal.await()
-
                 currentUserId = savedState.user_id
                 currentSessionId = savedState.session_id
                 currentSeqIndex = savedState.last_seq_index + 1
                 sessionStartTime = savedState.start_ts
-
                 recoverOrphans(savedState.user_id, savedState.session_id, savedState.last_seq_index)
-
                 log("SESSION_RESUMED", currentSessionId!!, currentSeqIndex, emptyMap())
                 startLoggingForCurrentShard()
                 startTicker()
@@ -99,7 +117,6 @@ class SessionManager(private val context: Context) {
 
         scope.launch {
             if (!boundSignal.isCompleted) {
-                Log.w(TAG, "Waiting for services to bind...")
                 withTimeoutOrNull(2000) { boundSignal.await() } ?: run {
                     Log.e(TAG, "❌ Service binding timed out. Cannot start.")
                     return@launch
@@ -110,8 +127,6 @@ class SessionManager(private val context: Context) {
 
             currentUserId = userId
             val now = System.currentTimeMillis()
-
-            // FIX: Readable Date-Time in Session ID
             val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
             val formattedTime = sdf.format(Date(now))
             val newId = "sess_${formattedTime}_${UUID.randomUUID().toString().substring(0, 4)}"
@@ -136,8 +151,104 @@ class SessionManager(private val context: Context) {
         val seq = currentSeqIndex
 
         physicalService?.startLogging(File(context.filesDir, "PHYS_${sessId}_$seq.jsonl"))
-        ScreenService.get()?.startLogging(File(context.filesDir, "SCREEN_${sessId}_$seq.jsonl"))
         audioService?.startRecording(File(context.filesDir, "AUDIO_${sessId}_$seq.m4a"))
+        startScreenLogging(File(context.filesDir, "SCREEN_${sessId}_$seq.jsonl"))
+    }
+
+    private fun startScreenLogging(file: File) {
+        closeScreenWriter()
+        try {
+            file.parentFile?.mkdirs()
+            screenWriter = BufferedWriter(FileWriter(file, true))
+        } catch (e: Exception) { Log.e(TAG, "Failed to open screen log", e) }
+
+        screenPollerJob?.cancel()
+        screenPollerJob = scope.launch {
+            val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+            val pm = context.packageManager
+            val logDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+
+            while (isActive) {
+                val now = System.currentTimeMillis()
+                val events = usageStatsManager.queryEvents(now - SCREEN_POLL_INTERVAL_MS * 2, now)
+                val event = UsageEvents.Event()
+
+                var latestPkg = lastPackageName
+                var latestClass = ""
+
+                while (events.hasNextEvent()) {
+                    events.getNextEvent(event)
+                    if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                        latestPkg = event.packageName
+                        latestClass = event.className
+                    }
+                }
+
+                if (latestPkg != lastPackageName && latestPkg.isNotEmpty()) {
+                    lastPackageName = latestPkg
+                    val appInfo = resolveAppInfo(pm, latestPkg)
+
+                    val json = JSONObject()
+                    json.put("timestamp", logDateFormat.format(Date(now)))
+                    json.put("event_type", "APP_SWITCH")
+                    json.put("app_name", appInfo.label) // Now "WhatsApp", not "com.whatsapp"
+                    json.put("package_name", latestPkg)
+                    json.put("activity_context", latestClass)
+                    json.put("is_system_app", appInfo.isSystem)
+
+                    // Only add category if valid
+                    if (appInfo.category != null) {
+                        json.put("category", appInfo.category)
+                    }
+
+                    try {
+                        screenWriter?.write(json.toString())
+                        screenWriter?.newLine()
+                        screenWriter?.flush()
+                    } catch (e: IOException) { Log.e(TAG, "Screen write failed", e) }
+                }
+
+                delay(SCREEN_POLL_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun resolveAppInfo(pm: PackageManager, pkg: String): AppInfo {
+        return appInfoCache.getOrPut(pkg) {
+            try {
+                val ai = pm.getApplicationInfo(pkg, 0)
+
+                // A. Better Label Resolution
+                var label = pm.getApplicationLabel(ai).toString()
+
+                // If label is just the package name (e.g. "com.whatsapp"), format it manually
+                if (label == pkg || label.contains(".")) {
+                    val parts = pkg.split(".")
+                    if (parts.isNotEmpty()) {
+                        // "com.microsoft.teams" -> "Teams"
+                        label = parts.last().replaceFirstChar { it.uppercase() }
+                    }
+                }
+
+                val isSystem = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+
+                // B. Better Category Handling
+                var catLabel: String? = null
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    val catTitle = ApplicationInfo.getCategoryTitle(context, ai.category)
+                    // Only store if it's a real category, not "Unknown"
+                    if (catTitle != null && catTitle != "Unknown") {
+                        catLabel = catTitle.toString()
+                    }
+                }
+
+                AppInfo(label, isSystem, catLabel)
+            } catch (e: Exception) {
+                // Fallback: com.example.myapp -> Myapp
+                val simpleName = pkg.split(".").last().replaceFirstChar { it.uppercase() }
+                AppInfo(simpleName, false, null)
+            }
+        }
     }
 
     fun stopSession() {
@@ -145,8 +256,10 @@ class SessionManager(private val context: Context) {
             val sessionId = currentSessionId ?: return@launch
 
             physicalService?.stopLogging()
-            ScreenService.get()?.stopLogging()
             audioService?.stopRecording()
+
+            screenPollerJob?.cancel()
+            closeScreenWriter()
             tickerJob?.cancel()
 
             val duration = System.currentTimeMillis() - sessionStartTime
@@ -164,12 +277,12 @@ class SessionManager(private val context: Context) {
         }
     }
 
-    private fun discardCurrentFiles(sessionId: String, seq: Int) {
-        listOf(
-            File(context.filesDir, "PHYS_${sessionId}_$seq.jsonl"),
-            File(context.filesDir, "SCREEN_${sessionId}_$seq.jsonl"),
-            File(context.filesDir, "AUDIO_${sessionId}_$seq.m4a")
-        ).forEach { if (it.exists()) it.delete() }
+    private fun closeScreenWriter() {
+        try {
+            screenWriter?.flush()
+            screenWriter?.close()
+        } catch (e: Exception) {}
+        screenWriter = null
     }
 
     private fun startTicker() {
@@ -190,8 +303,8 @@ class SessionManager(private val context: Context) {
                     val nextSeq = currentSeqIndex + 1
 
                     physicalService?.rotateLog(File(context.filesDir, "PHYS_${sessId}_$nextSeq.jsonl"))
-                    ScreenService.get()?.rotateLog(File(context.filesDir, "SCREEN_${sessId}_$nextSeq.jsonl"))
                     audioService?.rotateRecording(File(context.filesDir, "AUDIO_${sessId}_$nextSeq.m4a"))
+                    startScreenLogging(File(context.filesDir, "SCREEN_${sessId}_$nextSeq.jsonl"))
 
                     sealShard(uid, sessId, currentSeqIndex, isFinal = false)
 
@@ -206,6 +319,14 @@ class SessionManager(private val context: Context) {
         }
     }
 
+    private fun discardCurrentFiles(sessionId: String, seq: Int) {
+        listOf(
+            File(context.filesDir, "PHYS_${sessionId}_$seq.jsonl"),
+            File(context.filesDir, "SCREEN_${sessionId}_$seq.jsonl"),
+            File(context.filesDir, "AUDIO_${sessionId}_$seq.m4a")
+        ).forEach { if (it.exists()) it.delete() }
+    }
+
     private suspend fun recoverOrphans(userId: String, sessionId: String, seq: Int) {
         sealShard(userId, sessionId, seq, isFinal = false)
     }
@@ -218,14 +339,10 @@ class SessionManager(private val context: Context) {
         suspend fun queueIfValid(type: String, filename: String) {
             val file = File(context.filesDir, filename)
             if (!file.exists()) return
-
-            // Check for empty files
             if (file.length() < MIN_FILE_SIZE_BYTES) {
-                Log.w(TAG, "⚠️ Discarding empty: $filename")
                 file.delete()
                 return
             }
-
             hasValidData = true
             dao.insertQueueItem(UploadQueueEntity(
                 user_id = userId, session_id = sessionId, seq_index = seq,
@@ -239,16 +356,12 @@ class SessionManager(private val context: Context) {
 
         if (hasValidData) {
             val inputData = Data.Builder().putString("USER_ID", userId).build()
-
-            WorkManager.getInstance(context).enqueueUniqueWork(
-                "context_worker_$userId", ExistingWorkPolicy.APPEND_OR_REPLACE,
+            val wm = WorkManager.getInstance(context)
+            wm.enqueueUniqueWork("context_worker_$userId", ExistingWorkPolicy.APPEND_OR_REPLACE,
                 OneTimeWorkRequestBuilder<ContextUploadWorker>()
                     .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                    .addTag(UploadConfig.TAG_CONTEXT).setInputData(inputData).build()
-            )
-
-            WorkManager.getInstance(context).enqueueUniqueWork(
-                "heavy_worker_$userId", ExistingWorkPolicy.APPEND_OR_REPLACE,
+                    .addTag(UploadConfig.TAG_CONTEXT).setInputData(inputData).build())
+            wm.enqueueUniqueWork("heavy_worker_$userId", ExistingWorkPolicy.APPEND_OR_REPLACE,
                 OneTimeWorkRequestBuilder<HeavyUploadWorker>()
                     .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build())
                     .addTag(UploadConfig.TAG_HEAVY).setInputData(inputData).build()

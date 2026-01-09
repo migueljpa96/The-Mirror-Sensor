@@ -80,7 +80,6 @@ fun OnboardingScreen(onComplete: () -> Unit, viewModel: OnboardingViewModel = vi
     }
 }
 
-// ... (Rest of file remains unchanged: SensorGrantStep, TransparencyStep, DrillStep, etc.)
 @Composable
 fun SensorGrantStep(viewModel: OnboardingViewModel) {
     val sensorState by viewModel.sensorState.collectAsState()
@@ -119,16 +118,34 @@ fun SensorGrantStep(viewModel: OnboardingViewModel) {
 
         Spacer(modifier = Modifier.height(32.dp))
 
+        // 1. Transparency (Notifications)
         SensorCable("Transparency", if (sensorState.hasNotifications) "Active: Transparency enabled." else "Required to show active status.", Icons.Default.Notifications, sensorState.hasNotifications) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) handlePermissionClick(Manifest.permission.POST_NOTIFICATIONS, sensorState.hasNotifications, notifLauncher)
         }
         Spacer(modifier = Modifier.height(16.dp))
+
+        // 2. Audio
         SensorCable("Session Audio", if (sensorState.hasMic) "Active: Microphone ready." else "Tap to grant microphone access.", Icons.Default.Mic, sensorState.hasMic) {
             handlePermissionClick(Manifest.permission.RECORD_AUDIO, sensorState.hasMic, micLauncher)
         }
         Spacer(modifier = Modifier.height(16.dp))
+
+        // 3. Location
         SensorCable("Spatial Context", if (sensorState.hasLocation) "Active: Location logging enabled." else "Tap to grant location access.", Icons.Default.LocationOn, sensorState.hasLocation) {
             handlePermissionClick(Manifest.permission.ACCESS_FINE_LOCATION, sensorState.hasLocation, locationLauncher)
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 4. NEW: Usage Stats (Screen Context)
+        SensorCable(
+            label = "Screen Context",
+            desc = if (sensorState.hasUsageStats) "Active: Usage stats enabled." else "Tap to grant Usage Access.",
+            icon = Icons.Default.Smartphone,
+            isConnected = sensorState.hasUsageStats
+        ) {
+            if (!sensorState.hasUsageStats) {
+                viewModel.openUsageSettings()
+            }
         }
 
         Spacer(modifier = Modifier.weight(1f))
