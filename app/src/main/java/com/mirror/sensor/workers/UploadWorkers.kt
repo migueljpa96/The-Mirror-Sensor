@@ -13,12 +13,13 @@ import com.mirror.sensor.data.db.UploadQueueEntity
 import kotlinx.coroutines.tasks.await
 import java.io.File
 
-// BATCH_SIZE limits how many files we process per 10-minute job window.
-// 20 Context files (~200KB) is trivial.
-private const val BATCH_SIZE_CONTEXT = 20
-// 5 Heavy files (~50MB) is a safe limit for mobile upstream.
-private const val BATCH_SIZE_HEAVY = 5
+// Increased scan size to ensure we find relevant items even in a mixed queue
+private const val SCAN_LIMIT = 50
 
+/**
+ * Worker 1: ContextUploadWorker
+ * Handles: PHYS_LOG, SCREEN_LOG, CONTEXT_SUMMARY
+ */
 class ContextUploadWorker(appContext: Context, params: WorkerParameters) :
     CoroutineWorker(appContext, params) {
 
@@ -28,21 +29,26 @@ class ContextUploadWorker(appContext: Context, params: WorkerParameters) :
         val targetUserId = inputData.getString("USER_ID") ?: return Result.failure()
         val dao = AppDatabase.getDatabase(applicationContext).uploadDao()
 
-        // fetch with limit
-        val pendingItems = dao.getItemsByStatus("PENDING", BATCH_SIZE_CONTEXT).filter {
+        // 1. Fetch a larger batch of candidates to avoid starvation
+        val allCandidates = dao.getItemsByStatus("PENDING", SCAN_LIMIT)
+
+        // 2. Filter for relevant types
+        val workItems = allCandidates.filter {
             it.user_id == targetUserId &&
-                    (it.file_type == "PHYS_LOG" || it.file_type == "SCREEN_LOG")
+                    (it.file_type == "PHYS_LOG" ||
+                            it.file_type == "SCREEN_LOG" ||
+                            it.file_type == "CONTEXT_SUMMARY")
         }
 
-        if (pendingItems.isEmpty()) return Result.success()
+        if (workItems.isEmpty()) return Result.success()
 
         var hasFailures = false
-        pendingItems.forEach { item ->
-            val success = uploadItem(dao, item)
-            if (!success) hasFailures = true
+        // Process up to 20 items per run to be respectful of resources
+        workItems.take(20).forEach { item ->
+            if (!uploadItem(dao, item)) hasFailures = true
         }
 
-        // If some failed, return Retry to trigger backoff. If all succeeded, Success.
+        // If we found work, we might have more. If failed, retry.
         return if (hasFailures) Result.retry() else Result.success()
     }
 
@@ -51,28 +57,27 @@ class ContextUploadWorker(appContext: Context, params: WorkerParameters) :
 
         val file = File(item.file_path)
         if (!file.exists()) {
-            Log.e(TAG, "❌ File missing: ${item.file_path}. Marking FAILED_PERM.")
-            // Critical: Do not retry missing files, it creates infinite loops.
             dao.update(item.copy(status = "FAILED_PERM"))
             return true
         }
 
         return try {
-            val filename = file.name
-            val cloudPath = "users/${item.user_id}/sessions/${item.session_id}/$filename"
-            val ref = storage.reference.child(cloudPath)
+            val ref = storage.reference.child("users/${item.user_id}/sessions/${item.session_id}/${file.name}")
 
-            val metadata = StorageMetadata.Builder()
+            val metaBuilder = StorageMetadata.Builder()
                 .setCustomMetadata("trace_id", item.trace_id)
                 .setCustomMetadata("seq_index", item.seq_index.toString())
                 .setCustomMetadata("type", item.file_type)
-                .build()
 
-            ref.putFile(Uri.fromFile(file), metadata).await()
+            if (item.file_type == "CONTEXT_SUMMARY") {
+                metaBuilder.setContentType("text/plain")
+            }
+
+            ref.putFile(Uri.fromFile(file), metaBuilder.build()).await()
 
             file.delete()
             dao.update(item.copy(status = "COMPLETED", attempts = item.attempts + 1))
-            Log.i(TAG, "✅ Uploaded Context: $filename")
+            Log.i(TAG, "✅ Uploaded Context: ${file.name}")
             true
 
         } catch (e: Exception) {
@@ -90,6 +95,10 @@ class ContextUploadWorker(appContext: Context, params: WorkerParameters) :
     companion object { const val TAG = "MirrorContextUpload" }
 }
 
+/**
+ * Worker 2: HeavyUploadWorker
+ * Handles: AUDIO
+ */
 class HeavyUploadWorker(appContext: Context, params: WorkerParameters) :
     CoroutineWorker(appContext, params) {
 
@@ -99,14 +108,19 @@ class HeavyUploadWorker(appContext: Context, params: WorkerParameters) :
         val targetUserId = inputData.getString("USER_ID") ?: return Result.failure()
         val dao = AppDatabase.getDatabase(applicationContext).uploadDao()
 
-        val pendingItems = dao.getItemsByStatus("PENDING", BATCH_SIZE_HEAVY).filter {
+        // 1. Fetch larger batch to find Audio files buried behind logs
+        val allCandidates = dao.getItemsByStatus("PENDING", SCAN_LIMIT)
+
+        // 2. Filter for AUDIO
+        val workItems = allCandidates.filter {
             it.user_id == targetUserId && it.file_type == "AUDIO"
         }
 
-        if (pendingItems.isEmpty()) return Result.success()
+        if (workItems.isEmpty()) return Result.success()
 
         var hasFailures = false
-        pendingItems.forEach { item ->
+        // Process up to 5 audio files per run
+        workItems.take(5).forEach { item ->
             if (System.currentTimeMillis() < item.retry_after) return@forEach
             if (!uploadItem(dao, item)) hasFailures = true
         }
@@ -118,15 +132,12 @@ class HeavyUploadWorker(appContext: Context, params: WorkerParameters) :
 
         val file = File(item.file_path)
         if (!file.exists()) {
-            Log.e(TAG, "❌ Audio Missing: ${item.file_path}")
             dao.update(item.copy(status = "FAILED_PERM"))
             return true
         }
 
         return try {
-            val filename = file.name
-            val cloudPath = "users/${item.user_id}/sessions/${item.session_id}/$filename"
-            val ref = storage.reference.child(cloudPath)
+            val ref = storage.reference.child("users/${item.user_id}/sessions/${item.session_id}/${file.name}")
 
             val metadata = StorageMetadata.Builder()
                 .setCustomMetadata("trace_id", item.trace_id)
@@ -139,7 +150,7 @@ class HeavyUploadWorker(appContext: Context, params: WorkerParameters) :
 
             file.delete()
             dao.update(item.copy(status = "COMPLETED", attempts = item.attempts + 1))
-            Log.i(TAG, "✅ Uploaded Heavy: $filename")
+            Log.i(TAG, "✅ Uploaded Heavy: ${file.name}")
             true
 
         } catch (e: Exception) {
