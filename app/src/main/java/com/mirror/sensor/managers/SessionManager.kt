@@ -41,19 +41,25 @@ class SessionManager(private val context: Context) {
     private val db = AppDatabase.getDatabase(context)
     private val scope = CoroutineScope(Dispatchers.IO + Job())
 
-    // Standard Variables
-    private var tickerJob: Job? = null
-    private var screenPollerJob: Job? = null
-    private val MIN_SESSION_DURATION_MS = 5000L
+    // --- CONFIGURATION ---
+    // GOAL 1: Only keep sessions longer than 1 minute
+    private val MIN_SESSION_DURATION_MS = 60_000L
     private val MIN_FILE_SIZE_BYTES = 10L
     private val SCREEN_POLL_INTERVAL_MS = 2000L
+
+    // State
     private var currentUserId: String? = null
     private var currentSessionId: String? = null
     private var currentSeqIndex: Int = 0
     private var sessionStartTime: Long = 0L
     private var lastPackageName: String = ""
+
+    // IO & Services
     private var screenWriter: BufferedWriter? = null
+    private var tickerJob: Job? = null
+    private var screenPollerJob: Job? = null
     private val appInfoCache = ConcurrentHashMap<String, AppInfo>()
+
     private var physicalService: PhysicalService? = null
     private var audioService: AudioService? = null
     private val boundSignal = CompletableDeferred<Unit>()
@@ -94,17 +100,23 @@ class SessionManager(private val context: Context) {
         }
     }
 
+    // --- SESSION CONTROL ---
+
     fun startSession(userId: String) {
         if (!UploadConfig.SESSION_CHUNKING_ENABLED) return
         scope.launch {
             if (!boundSignal.isCompleted) withTimeoutOrNull(2000) { boundSignal.await() }
             if (currentSessionId != null) return@launch
-            currentUserId = userId; val now = System.currentTimeMillis()
+
+            currentUserId = userId
+            val now = System.currentTimeMillis()
             val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
             val newId = "sess_${sdf.format(Date(now))}_${UUID.randomUUID().toString().substring(0, 4)}"
-            currentSessionId = newId; currentSeqIndex = 0; sessionStartTime = now
 
-            // FIX 1: Use Named Arguments for Entity
+            currentSessionId = newId
+            currentSeqIndex = 0
+            sessionStartTime = now
+
             db.uploadDao().setSessionState(SessionStateEntity(
                 user_id = userId,
                 session_id = newId,
@@ -114,16 +126,33 @@ class SessionManager(private val context: Context) {
             ))
 
             log("SESSION_STARTED", newId, 0, mapOf("uid" to userId))
-            startLoggingForCurrentShard(); startTicker()
+            startLoggingForCurrentShard()
+            startTicker()
         }
     }
 
     fun stopSession() {
         scope.launch {
             val sessionId = currentSessionId ?: return@launch
-            physicalService?.stopLogging(); audioService?.stopRecording()
-            screenPollerJob?.cancel(); closeScreenWriter(); tickerJob?.cancel()
-            sealShard(currentUserId!!, sessionId, currentSeqIndex, isFinal = true)
+
+            // Stop all inputs
+            physicalService?.stopLogging()
+            audioService?.stopRecording()
+            screenPollerJob?.cancel()
+            closeScreenWriter()
+            tickerJob?.cancel()
+
+            val duration = System.currentTimeMillis() - sessionStartTime
+
+            // GOAL 1 CHECK: If too short, nuke everything
+            if (duration < MIN_SESSION_DURATION_MS) {
+                log("SESSION_DISCARDED", sessionId, currentSeqIndex, mapOf("reason" to "too_short", "dur" to duration))
+                discardCurrentFiles(sessionId, currentSeqIndex)
+            } else {
+                sealShard(currentUserId!!, sessionId, currentSeqIndex, isFinal = true)
+                log("SESSION_STOPPED", sessionId, currentSeqIndex, mapOf("dur" to duration))
+            }
+
             db.uploadDao().clearSessionState()
             currentSessionId = null; currentUserId = null
         }
@@ -151,48 +180,65 @@ class SessionManager(private val context: Context) {
                     physicalService?.rotateLog(File(context.filesDir, "PHYS_${sessId}_$nextSeq.jsonl"))
                     audioService?.rotateRecording(File(context.filesDir, "AUDIO_${sessId}_$nextSeq.m4a"))
                     startScreenLogging(File(context.filesDir, "SCREEN_${sessId}_$nextSeq.jsonl"))
+
                     sealShard(uid, sessId, currentSeqIndex, isFinal = false)
                     currentSeqIndex = nextSeq
 
-                    // FIX 2: Use Named Arguments here as well
                     db.uploadDao().setSessionState(SessionStateEntity(
-                        user_id = uid,
-                        session_id = sessId,
-                        start_ts = sessionStartTime,
-                        last_seq_index = currentSeqIndex,
-                        is_active = true
+                        user_id = uid, session_id = sessId, start_ts = sessionStartTime,
+                        last_seq_index = currentSeqIndex, is_active = true
                     ))
                 }
             }
         }
     }
 
+    // --- SCREEN CAPTURE (RAW TELEMETRY) ---
+    // GOAL 2: We purposefully capture package names here for performance/stability.
+
     private fun startScreenLogging(file: File) {
         closeScreenWriter()
         try { file.parentFile?.mkdirs(); screenWriter = BufferedWriter(FileWriter(file, true)) } catch (e: Exception) {}
+
         screenPollerJob?.cancel()
         screenPollerJob = scope.launch {
             val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
             val pm = context.packageManager
             val logDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+
             while (isActive) {
                 val now = System.currentTimeMillis()
                 val events = usageStatsManager.queryEvents(now - SCREEN_POLL_INTERVAL_MS * 2, now)
                 val event = UsageEvents.Event()
                 var latestPkg = lastPackageName; var latestClass = ""
+
                 while (events.hasNextEvent()) {
                     events.getNextEvent(event)
-                    if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) { latestPkg = event.packageName; latestClass = event.className }
+                    if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                        latestPkg = event.packageName
+                        latestClass = event.className
+                    }
                 }
+
                 if (latestPkg != lastPackageName && latestPkg.isNotEmpty()) {
                     lastPackageName = latestPkg
+                    // We use lightweight resolution here (mostly returns pkg name)
                     val appInfo = resolveAppInfo(pm, latestPkg)
+
                     val json = JSONObject()
-                    json.put("timestamp", logDateFormat.format(Date(now))); json.put("event_type", "APP_SWITCH")
-                    json.put("app_name", appInfo.label); json.put("package_name", latestPkg)
-                    json.put("activity_context", latestClass); json.put("is_system_app", appInfo.isSystem)
+                    json.put("timestamp", logDateFormat.format(Date(now)))
+                    json.put("event_type", "APP_SWITCH")
+                    json.put("app_name", appInfo.label) // Contains pkg name usually
+                    json.put("package_name", latestPkg)
+                    json.put("activity_context", latestClass)
+                    json.put("is_system_app", appInfo.isSystem)
                     if (appInfo.category != null) json.put("category", appInfo.category)
-                    try { screenWriter?.write(json.toString()); screenWriter?.newLine(); screenWriter?.flush() } catch (e: Exception) {}
+
+                    try {
+                        screenWriter?.write(json.toString())
+                        screenWriter?.newLine()
+                        screenWriter?.flush()
+                    } catch (e: IOException) { Log.e(TAG, "Screen write failed", e) }
                 }
                 delay(SCREEN_POLL_INTERVAL_MS)
             }
@@ -200,7 +246,84 @@ class SessionManager(private val context: Context) {
     }
 
     private fun closeScreenWriter() { try { screenWriter?.flush(); screenWriter?.close() } catch (e: Exception) {}; screenWriter = null }
-    private fun resolveAppInfo(pm: PackageManager, pkg: String): AppInfo { return appInfoCache.getOrPut(pkg) { AppInfo(pkg, false, null) } }
+
+    // Lightweight cache - mostly stores package names to avoid PM spam
+    private fun resolveAppInfo(pm: PackageManager, pkg: String): AppInfo {
+        return appInfoCache.getOrPut(pkg) { AppInfo(pkg, false, null) }
+    }
+
+    // --- SUMMARIZATION LOGIC (SEMANTIC LAYER) ---
+    // GOAL 3: This is where we pay the cost to resolve meaningful names.
+
+    private fun getHumanReadableAppName(pkgName: String): String {
+        return try {
+            val pm = context.packageManager
+            val ai = pm.getApplicationInfo(pkgName, 0)
+            val label = pm.getApplicationLabel(ai).toString()
+            if (label.isNotEmpty()) label else pkgName
+        } catch (e: Exception) {
+            // Fallback: com.instagram.android -> Instagram
+            pkgName.split('.').lastOrNull()?.replaceFirstChar { it.uppercase() } ?: pkgName
+        }
+    }
+
+    private fun summarizeScreenLog(file: File): String {
+        if (!file.exists()) return "Screen Context: No data."
+        try {
+            val lines = file.readLines(); if (lines.isEmpty()) return "Screen Context: No events."
+
+            val appCounts = mutableMapOf<String, Int>()
+            val categories = mutableMapOf<String, Int>()
+            var tsFirst: Long = 0; var tsLast: Long = 0
+            val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+
+            lines.forEach { line ->
+                val json = JSONObject(line)
+                val t = fmt.parse(json.getString("timestamp"))?.time ?: 0L
+                if (tsFirst == 0L) tsFirst = t
+                tsLast = t
+
+                val rawPkg = json.optString("package_name", "Unknown")
+                val cat = json.optString("category", "Unknown")
+
+                // FILTER NOISE
+                val isLauncher = rawPkg.contains("launcher", ignoreCase = true) ||
+                        rawPkg.contains("home", ignoreCase = true) ||
+                        rawPkg.contains("recents", ignoreCase = true)
+                val isSelf = rawPkg.contains("com.mirror.sensor", ignoreCase = true)
+
+                if (!isLauncher && !isSelf && rawPkg != "Unknown") {
+                    // RESOLVE NAME HERE
+                    val humanName = getHumanReadableAppName(rawPkg)
+
+                    appCounts[humanName] = appCounts.getOrDefault(humanName, 0) + 1
+
+                    if (cat != "Unknown") {
+                        categories[cat] = categories.getOrDefault(cat, 0) + 1
+                    }
+                }
+            }
+
+            val sb = StringBuilder()
+            val durationMin = (tsLast - tsFirst) / 60000.0
+            val totalSwitches = appCounts.values.sum()
+            val switchesPerMin = if (durationMin > 0.1) (totalSwitches / durationMin).roundToInt() else 0
+
+            sb.append("Focus: ${if (switchesPerMin > 5) "Fragmented" else "Focused Flow"} ($switchesPerMin switches/min). ")
+
+            if (appCounts.isNotEmpty()) {
+                val topApps = appCounts.entries.sortedByDescending { it.value }.take(3)
+                    .joinToString(", ") { "${it.key} (${it.value})" }
+                sb.append("Dominant Apps: $topApps. ")
+            }
+            if (categories.isNotEmpty()) {
+                val topCats = categories.entries.sortedByDescending { it.value }.take(2)
+                    .joinToString(", ") { "${it.key} (${it.value})" }
+                sb.append("Categories: $topCats.")
+            }
+            return sb.toString()
+        } catch (e: Exception) { return "Screen Context: Parse Error." }
+    }
 
     private fun summarizePhysicalLog(file: File): String {
         if (!file.exists()) return "Physical Context: No data."
@@ -240,48 +363,7 @@ class SessionManager(private val context: Context) {
         } catch (e: Exception) { return "Physical Context: Parse Error." }
     }
 
-    private fun summarizeScreenLog(file: File): String {
-        if (!file.exists()) return "Screen Context: No data."
-        try {
-            val lines = file.readLines(); if (lines.isEmpty()) return "Screen Context: No events."
-            val appCounts = mutableMapOf<String, Int>(); val categories = mutableMapOf<String, Int>()
-            var tsFirst: Long = 0; var tsLast: Long = 0
-            val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
-
-            lines.forEach { line ->
-                val json = JSONObject(line)
-                val t = fmt.parse(json.getString("timestamp"))?.time ?: 0L
-                if (tsFirst == 0L) tsFirst = t
-                tsLast = t
-
-                val app = json.optString("app_name", "Unknown")
-                val cat = json.optString("category", "Unknown")
-                if (app != "TheMirrorSensor" && !app.contains("Launcher")) {
-                    appCounts[app] = appCounts.getOrDefault(app, 0) + 1
-                    if (cat != "Unknown") categories[cat] = categories.getOrDefault(cat, 0) + 1
-                }
-            }
-
-            val sb = StringBuilder()
-            val durationMin = (tsLast - tsFirst) / 60000.0
-            val totalSwitches = appCounts.values.sum()
-            val switchesPerMin = if (durationMin > 0) (totalSwitches / durationMin).roundToInt() else 0
-
-            sb.append("Focus: ${if (switchesPerMin > 5) "Fragmented" else "Focused Flow"} ($switchesPerMin switches/min). ")
-
-            if (appCounts.isNotEmpty()) {
-                val topApps = appCounts.entries.sortedByDescending { it.value }.take(3)
-                    .joinToString(", ") { "${it.key} (${it.value})" }
-                sb.append("Dominant Apps: $topApps. ")
-            }
-            if (categories.isNotEmpty()) {
-                val topCats = categories.entries.sortedByDescending { it.value }.take(2)
-                    .joinToString(", ") { "${it.key} (${it.value})" }
-                sb.append("Categories: $topCats.")
-            }
-            return sb.toString()
-        } catch (e: Exception) { return "Screen Context: Parse Error." }
-    }
+    // --- SEALING & UPLOAD ---
 
     private suspend fun sealShard(userId: String, sessionId: String, seq: Int, isFinal: Boolean) {
         val traceId = UUID.randomUUID().toString()
