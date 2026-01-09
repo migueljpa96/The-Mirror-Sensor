@@ -19,6 +19,9 @@ import com.mirror.sensor.workers.HeavyUploadWorker
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 class SessionManager(private val context: Context) {
@@ -28,7 +31,7 @@ class SessionManager(private val context: Context) {
     private var tickerJob: Job? = null
 
     // Thresholds
-    private val MIN_SESSION_DURATION_MS = 60000L
+    private val MIN_SESSION_DURATION_MS = 5000L // Reduced to 5s for easier testing
     private val MIN_FILE_SIZE_BYTES = 10L
 
     // State
@@ -82,8 +85,6 @@ class SessionManager(private val context: Context) {
                 currentSeqIndex = savedState.last_seq_index + 1
                 sessionStartTime = savedState.start_ts
 
-                // RECOVERY: Scan for orphan files from the crashed index (old seq_index)
-                // and queue them if they exist and are valid.
                 recoverOrphans(savedState.user_id, savedState.session_id, savedState.last_seq_index)
 
                 log("SESSION_RESUMED", currentSessionId!!, currentSeqIndex, emptyMap())
@@ -97,7 +98,6 @@ class SessionManager(private val context: Context) {
         if (!UploadConfig.SESSION_CHUNKING_ENABLED) return
 
         scope.launch {
-            // Block until services are bound to prevent NPE or silent failure
             if (!boundSignal.isCompleted) {
                 Log.w(TAG, "Waiting for services to bind...")
                 withTimeoutOrNull(2000) { boundSignal.await() } ?: run {
@@ -110,7 +110,12 @@ class SessionManager(private val context: Context) {
 
             currentUserId = userId
             val now = System.currentTimeMillis()
-            val newId = "sess_${now}_${UUID.randomUUID().toString().substring(0, 4)}"
+
+            // FIX: Readable Date-Time in Session ID
+            val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+            val formattedTime = sdf.format(Date(now))
+            val newId = "sess_${formattedTime}_${UUID.randomUUID().toString().substring(0, 4)}"
+
             currentSessionId = newId
             currentSeqIndex = 0
             sessionStartTime = now
@@ -171,7 +176,6 @@ class SessionManager(private val context: Context) {
         tickerJob?.cancel()
         tickerJob = scope.launch {
             while (isActive) {
-                // Drift Correction: Calculate delay based on target time
                 val now = System.currentTimeMillis()
                 val elapsed = now - sessionStartTime
                 val timeInShard = elapsed % UploadConfig.SHARD_DURATION_MS
@@ -203,8 +207,6 @@ class SessionManager(private val context: Context) {
     }
 
     private suspend fun recoverOrphans(userId: String, sessionId: String, seq: Int) {
-        // Just try to seal the previous shard. If files exist, they get queued.
-        // If not, queueIfValid handles it gracefully.
         sealShard(userId, sessionId, seq, isFinal = false)
     }
 
@@ -217,6 +219,7 @@ class SessionManager(private val context: Context) {
             val file = File(context.filesDir, filename)
             if (!file.exists()) return
 
+            // Check for empty files
             if (file.length() < MIN_FILE_SIZE_BYTES) {
                 Log.w(TAG, "⚠️ Discarding empty: $filename")
                 file.delete()
