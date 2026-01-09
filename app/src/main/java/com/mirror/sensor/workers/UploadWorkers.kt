@@ -13,6 +13,12 @@ import com.mirror.sensor.data.db.UploadQueueEntity
 import kotlinx.coroutines.tasks.await
 import java.io.File
 
+// BATCH_SIZE limits how many files we process per 10-minute job window.
+// 20 Context files (~200KB) is trivial.
+private const val BATCH_SIZE_CONTEXT = 20
+// 5 Heavy files (~50MB) is a safe limit for mobile upstream.
+private const val BATCH_SIZE_HEAVY = 5
+
 class ContextUploadWorker(appContext: Context, params: WorkerParameters) :
     CoroutineWorker(appContext, params) {
 
@@ -22,49 +28,48 @@ class ContextUploadWorker(appContext: Context, params: WorkerParameters) :
         val targetUserId = inputData.getString("USER_ID") ?: return Result.failure()
         val dao = AppDatabase.getDatabase(applicationContext).uploadDao()
 
-        // 1. Fetch Context items (Logs) bound to this user
-        val pendingItems = dao.getItemsByStatus("PENDING").filter {
+        // fetch with limit
+        val pendingItems = dao.getItemsByStatus("PENDING", BATCH_SIZE_CONTEXT).filter {
             it.user_id == targetUserId &&
                     (it.file_type == "PHYS_LOG" || it.file_type == "SCREEN_LOG")
         }
 
         if (pendingItems.isEmpty()) return Result.success()
 
+        var hasFailures = false
         pendingItems.forEach { item ->
-            if (!uploadItem(dao, item)) return Result.retry()
+            val success = uploadItem(dao, item)
+            if (!success) hasFailures = true
         }
-        return Result.success()
+
+        // If some failed, return Retry to trigger backoff. If all succeeded, Success.
+        return if (hasFailures) Result.retry() else Result.success()
     }
 
     private suspend fun uploadItem(dao: com.mirror.sensor.data.db.UploadDao, item: UploadQueueEntity): Boolean {
-        // Mark UPLOADING
         dao.update(item.copy(status = "UPLOADING"))
 
         val file = File(item.file_path)
         if (!file.exists()) {
-            Log.e(TAG, "❌ File not found: ${item.file_path}")
-            // Fail permanently to unblock queue
+            Log.e(TAG, "❌ File missing: ${item.file_path}. Marking FAILED_PERM.")
+            // Critical: Do not retry missing files, it creates infinite loops.
             dao.update(item.copy(status = "FAILED_PERM"))
             return true
         }
 
         return try {
-            // Construct Path: users/{uid}/sessions/{session_id}/{filename}
             val filename = file.name
             val cloudPath = "users/${item.user_id}/sessions/${item.session_id}/$filename"
             val ref = storage.reference.child(cloudPath)
 
-            // Attach Metadata for the Cloud Assembler
             val metadata = StorageMetadata.Builder()
                 .setCustomMetadata("trace_id", item.trace_id)
                 .setCustomMetadata("seq_index", item.seq_index.toString())
                 .setCustomMetadata("type", item.file_type)
                 .build()
 
-            // Upload
             ref.putFile(Uri.fromFile(file), metadata).await()
 
-            // Success: Delete local file and update DB
             file.delete()
             dao.update(item.copy(status = "COMPLETED", attempts = item.attempts + 1))
             Log.i(TAG, "✅ Uploaded Context: $filename")
@@ -72,23 +77,17 @@ class ContextUploadWorker(appContext: Context, params: WorkerParameters) :
 
         } catch (e: Exception) {
             Log.e(TAG, "⚠️ Upload Failed: ${item.file_path}", e)
-
-            // Calculate Backoff
             val nextAttempts = item.attempts + 1
-            val nextDelay = UploadConfig.getContextDelay(nextAttempts)
-
             dao.update(item.copy(
                 status = "PENDING",
                 attempts = nextAttempts,
-                retry_after = System.currentTimeMillis() + nextDelay
+                retry_after = System.currentTimeMillis() + UploadConfig.getContextDelay(nextAttempts)
             ))
-            false // Signal retry
+            false
         }
     }
 
-    companion object {
-        const val TAG = "MirrorContextUpload"
-    }
+    companion object { const val TAG = "MirrorContextUpload" }
 }
 
 class HeavyUploadWorker(appContext: Context, params: WorkerParameters) :
@@ -100,20 +99,18 @@ class HeavyUploadWorker(appContext: Context, params: WorkerParameters) :
         val targetUserId = inputData.getString("USER_ID") ?: return Result.failure()
         val dao = AppDatabase.getDatabase(applicationContext).uploadDao()
 
-        // 1. Fetch Heavy items (Audio) bound to this user
-        val pendingItems = dao.getItemsByStatus("PENDING").filter {
+        val pendingItems = dao.getItemsByStatus("PENDING", BATCH_SIZE_HEAVY).filter {
             it.user_id == targetUserId && it.file_type == "AUDIO"
         }
 
         if (pendingItems.isEmpty()) return Result.success()
 
+        var hasFailures = false
         pendingItems.forEach { item ->
-            // Check manual backoff
             if (System.currentTimeMillis() < item.retry_after) return@forEach
-
-            if (!uploadItem(dao, item)) return Result.retry()
+            if (!uploadItem(dao, item)) hasFailures = true
         }
-        return Result.success()
+        return if (hasFailures) Result.retry() else Result.success()
     }
 
     private suspend fun uploadItem(dao: com.mirror.sensor.data.db.UploadDao, item: UploadQueueEntity): Boolean {
@@ -121,7 +118,7 @@ class HeavyUploadWorker(appContext: Context, params: WorkerParameters) :
 
         val file = File(item.file_path)
         if (!file.exists()) {
-            Log.e(TAG, "❌ Audio File not found: ${item.file_path}")
+            Log.e(TAG, "❌ Audio Missing: ${item.file_path}")
             dao.update(item.copy(status = "FAILED_PERM"))
             return true
         }
@@ -131,39 +128,31 @@ class HeavyUploadWorker(appContext: Context, params: WorkerParameters) :
             val cloudPath = "users/${item.user_id}/sessions/${item.session_id}/$filename"
             val ref = storage.reference.child(cloudPath)
 
-            // Metadata including Silence Default
             val metadata = StorageMetadata.Builder()
                 .setCustomMetadata("trace_id", item.trace_id)
                 .setCustomMetadata("seq_index", item.seq_index.toString())
                 .setCustomMetadata("type", item.file_type)
-                .setCustomMetadata("is_silent", "false") // Default for now
+                .setCustomMetadata("is_silent", "false")
                 .build()
 
-            // Upload
             ref.putFile(Uri.fromFile(file), metadata).await()
 
-            // Success
             file.delete()
             dao.update(item.copy(status = "COMPLETED", attempts = item.attempts + 1))
             Log.i(TAG, "✅ Uploaded Heavy: $filename")
             true
 
         } catch (e: Exception) {
-            Log.e(TAG, "⚠️ Audio Upload Failed: ${item.file_path}", e)
-
+            Log.e(TAG, "⚠️ Audio Upload Failed", e)
             val nextAttempts = item.attempts + 1
-            val nextDelay = UploadConfig.getHeavyDelay(nextAttempts)
-
             dao.update(item.copy(
                 status = "PENDING",
                 attempts = nextAttempts,
-                retry_after = System.currentTimeMillis() + nextDelay
+                retry_after = System.currentTimeMillis() + UploadConfig.getHeavyDelay(nextAttempts)
             ))
             false
         }
     }
 
-    companion object {
-        const val TAG = "MirrorHeavyUpload"
-    }
+    companion object { const val TAG = "MirrorHeavyUpload" }
 }
